@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -33,20 +34,57 @@ func main() {
 	// Handle multiple commands from the same connection
 	reader := bufio.NewReader(conn)
 	for {
-		// Read a line from the connection
+		// Read the number of arguments (starts with *)
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			// Connection closed or error occurred
 			break
 		}
 		
-		// Remove \r\n from the line
-		line = strings.TrimSpace(line)
-		
-		// Only respond if we got a non-empty line
-		if line != "" {
-			// Respond with PONG for each command
-			conn.Write([]byte("+PONG\r\n"))
+		// Check if it's a RESP array (starts with *)
+		if !strings.HasPrefix(line, "*") {
+			continue
 		}
+		
+		// Parse the number of arguments
+		argCount, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "*")))
+		if err != nil {
+			continue
+		}
+		
+		// Read all arguments
+		for i := 0; i < argCount; i++ {
+			// Read the argument length (starts with $)
+			argLenLine, err := reader.ReadString('\n')
+			if err != nil {
+				break
+			}
+			
+			if !strings.HasPrefix(argLenLine, "$") {
+				continue
+			}
+			
+			// Parse the argument length
+			argLen, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(argLenLine, "$")))
+			if err != nil {
+				continue
+			}
+			
+			// Read the argument value
+			arg := make([]byte, argLen)
+			_, err = reader.Read(arg)
+			if err != nil {
+				break
+			}
+			
+			// Read the \r\n after the argument
+			_, err = reader.ReadString('\n')
+			if err != nil {
+				break
+			}
+		}
+		
+		// Respond with PONG for each complete command
+		conn.Write([]byte("+PONG\r\n"))
 	}
 }
