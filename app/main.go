@@ -13,64 +13,103 @@ import (
 var _ = net.Listen
 var _ = os.Exit
 
+func parseRESPArray(reader *bufio.Reader) ([]string, error) {
+	// Read the number of arguments (starts with *)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return nil, err
+	}
+	
+	// Check if it's a RESP array (starts with *)
+	if !strings.HasPrefix(line, "*") {
+		return nil, fmt.Errorf("expected array, got: %s", line)
+	}
+	
+	// Parse the number of arguments
+	argCount, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "*")))
+	if err != nil {
+		return nil, err
+	}
+	
+	args := make([]string, argCount)
+	
+	// Read all arguments
+	for i := 0; i < argCount; i++ {
+		// Read the argument length (starts with $)
+		argLenLine, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		
+		if !strings.HasPrefix(argLenLine, "$") {
+			return nil, fmt.Errorf("expected bulk string, got: %s", argLenLine)
+		}
+		
+		// Parse the argument length
+		argLen, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(argLenLine, "$")))
+		if err != nil {
+			return nil, err
+		}
+		
+		// Read the argument value
+		arg := make([]byte, argLen)
+		_, err = reader.Read(arg)
+		if err != nil {
+			return nil, err
+		}
+		
+		// Read the \r\n after the argument
+		_, err = reader.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		
+		args[i] = string(arg)
+	}
+	
+	return args, nil
+}
+
+func handleCommand(args []string) string {
+	if len(args) == 0 {
+		return "-ERR no command\r\n"
+	}
+	
+	command := strings.ToLower(args[0])
+	
+	switch command {
+	case "ping":
+		return "+PONG\r\n"
+	case "echo":
+		if len(args) < 2 {
+			return "-ERR wrong number of arguments for ECHO command\r\n"
+		}
+		// Return the argument as a RESP bulk string
+		message := args[1]
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(message), message)
+	default:
+		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
+	}
+}
+
 func handleClient(conn net.Conn) {
 	defer conn.Close()
 
 	// Handle multiple commands from the same connection
 	reader := bufio.NewReader(conn)
 	for {
-		// Read the number of arguments (starts with *)
-		line, err := reader.ReadString('\n')
+		// Parse the RESP array (command and arguments)
+		args, err := parseRESPArray(reader)
 		if err != nil {
 			// Connection closed or error occurred
 			break
 		}
 		
-		// Check if it's a RESP array (starts with *)
-		if !strings.HasPrefix(line, "*") {
-			continue
-		}
+		// Handle the command and get response
+		response := handleCommand(args)
 		
-		// Parse the number of arguments
-		argCount, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "*")))
-		if err != nil {
-			continue
-		}
-		
-		// Read all arguments
-		for i := 0; i < argCount; i++ {
-			// Read the argument length (starts with $)
-			argLenLine, err := reader.ReadString('\n')
-			if err != nil {
-				break
-			}
-			
-			if !strings.HasPrefix(argLenLine, "$") {
-				continue
-			}
-			
-			// Parse the argument length
-			argLen, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(argLenLine, "$")))
-			if err != nil {
-				continue
-			}
-			
-			// Read the argument value
-			arg := make([]byte, argLen)
-			_, err = reader.Read(arg)
-			if err != nil {
-				break
-			}
-			
-			// Read the \r\n after the argument
-			_, err = reader.ReadString('\n')
-			if err != nil {
-				break
-			}
-		}
-		
-		// Respond with PONG for each complete command
-		conn.Write([]byte("+PONG\r\n"))
+		// Send the response
+		conn.Write([]byte(response))
 	}
 }
 
