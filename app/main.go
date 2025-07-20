@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 )
 
 // Ensures gofmt doesn't remove the "net" and "os" imports in stage 1 (feel free to remove this!)
@@ -33,13 +34,19 @@ func main() {
 	reader := bufio.NewReader(conn)
 	for {
 		// Read a line from the connection
-		_, err := reader.ReadString('\n')
+		line, err := reader.ReadString('\n')
 		if err != nil {
 			// Connection closed or error occurred
 			break
 		}
 		
-		// Respond with PONG for each command
-		conn.Write([]byte("+PONG\r\n"))
+		// Remove \r\n from the line
+		line = strings.TrimSpace(line)
+		
+		// Only respond if we got a non-empty line
+		if line != "" {
+			// Respond with PONG for each command
+			conn.Write([]byte("+PONG\r\n"))
+		}
 	}
 }
