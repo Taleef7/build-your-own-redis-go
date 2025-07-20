@@ -7,11 +7,18 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Ensures gofmt doesn't remove the "net" and "os" imports in stage 1 (feel free to remove this!)
 var _ = net.Listen
 var _ = os.Exit
+
+// Global storage for key-value pairs with mutex for thread safety
+var (
+	storage = make(map[string]string)
+	storageMutex sync.RWMutex
+)
 
 func parseRESPArray(reader *bufio.Reader) ([]string, error) {
 	// Read the number of arguments (starts with *)
@@ -87,6 +94,37 @@ func handleCommand(args []string) string {
 		// Return the argument as a RESP bulk string
 		message := args[1]
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(message), message)
+	case "set":
+		if len(args) < 3 {
+			return "-ERR wrong number of arguments for SET command\r\n"
+		}
+		key := args[1]
+		value := args[2]
+		
+		// Store the key-value pair
+		storageMutex.Lock()
+		storage[key] = value
+		storageMutex.Unlock()
+		
+		return "+OK\r\n"
+	case "get":
+		if len(args) < 2 {
+			return "-ERR wrong number of arguments for GET command\r\n"
+		}
+		key := args[1]
+		
+		// Retrieve the value
+		storageMutex.RLock()
+		value, exists := storage[key]
+		storageMutex.RUnlock()
+		
+		if !exists {
+			// Return null bulk string for non-existent keys
+			return "$-1\r\n"
+		}
+		
+		// Return the value as a RESP bulk string
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
 	}
