@@ -175,15 +175,18 @@ func handleCommand(args []string) string {
 		key := args[1]
 		value := args[2]
 		storageMutex.Lock()
-		_, exists := listStorage[key]
+		list, exists := listStorage[key]
 		if !exists {
 			listStorage[key] = []string{value}
 			storageMutex.Unlock()
 			return ":1\r\n"
 		}
-		// For this stage, we only need to handle creating a new list, so just return error if it exists
+		// Append to existing list
+		list = append(list, value)
+		listStorage[key] = list
+		length := len(list)
 		storageMutex.Unlock()
-		return "-ERR RPUSH to existing list not supported in this stage\r\n"
+		return fmt.Sprintf(":%d\r\n", length)
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
 	}
