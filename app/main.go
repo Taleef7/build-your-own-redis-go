@@ -241,6 +241,15 @@ func handleCommand(args []string) string {
 			resp += fmt.Sprintf("$%d\r\n%s\r\n", len(elem), elem)
 		}
 		return resp
+	case "llen":
+		if len(args) != 2 {
+			return "-ERR wrong number of arguments for LLEN command\r\n"
+		}
+		key := args[1]
+		storageMutex.RLock()
+		list := listStorage[key]
+		storageMutex.RUnlock()
+		return fmt.Sprintf(":%d\r\n", len(list))
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
 	}
