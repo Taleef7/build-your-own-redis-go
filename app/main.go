@@ -636,6 +636,14 @@ func handleCommand(args []string) string {
 			storageMutex.RLock()
 			entries := streamStorage[streamKey]
 			storageMutex.RUnlock()
+			// If lastID is $, treat as current max ID in the stream (or 0-0 if empty)
+			if lastID == "$" {
+				if len(entries) == 0 {
+					lastID = "0-0"
+				} else {
+					lastID = entries[len(entries)-1].ID
+				}
+			}
 			lastParts := strings.Split(lastID, "-")
 			var lastT, lastS int64
 			if len(lastParts) == 2 {
@@ -693,6 +701,14 @@ func handleCommand(args []string) string {
 					storageMutex.RLock()
 					entries := streamStorage[key]
 					storageMutex.RUnlock()
+					// If lastID is $, treat as current max ID in the stream (or 0-0 if empty)
+					if lastID == "$" {
+						if len(entries) == 0 {
+							lastID = "0-0"
+						} else {
+							lastID = entries[len(entries)-1].ID
+						}
+					}
 					lastParts := strings.Split(lastID, "-")
 					var lastT, lastS int64
 					if len(lastParts) == 2 {
