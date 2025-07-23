@@ -193,7 +193,7 @@ func handleCommand(args []string) string {
 		storageMutex.Lock()
 		list := listStorage[key]
 		// Prepend elements in order (leftmost argument becomes new head)
-		for i := len(elements) - 1; i >= 0; i-- {
+		for i := 0; i < len(elements); i++ {
 			list = append([]string{elements[i]}, list...)
 		}
 		listStorage[key] = list
