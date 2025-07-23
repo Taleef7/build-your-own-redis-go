@@ -177,9 +177,10 @@ func handleCommand(args []string) string {
 			return "-ERR wrong number of arguments for BLPOP command\r\n"
 		}
 		key := args[1]
-		timeout := args[2] // always 0 for this stage
-		if timeout != "0" {
-			return "-ERR only timeout=0 supported in this stage\r\n"
+		timeoutStr := args[2]
+		timeoutSec, err := strconv.ParseFloat(timeoutStr, 64)
+		if err != nil || timeoutSec < 0 {
+			return "-ERR invalid timeout\r\n"
 		}
 		storageMutex.Lock()
 		list := listStorage[key]
@@ -192,14 +193,34 @@ func handleCommand(args []string) string {
 			return resp
 		}
 		storageMutex.Unlock()
-		// Block: create a channel, add to waiters, and wait
-		ch := make(chan [2]string)
+		ch := make(chan [2]string, 1)
 		blpopMutex.Lock()
 		blpopWaiters[key] = append(blpopWaiters[key], ch)
 		blpopMutex.Unlock()
-		result := <-ch // Wait until signaled
-		resp := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(result[0]), result[0], len(result[1]), result[1])
-		return resp
+		if timeoutSec == 0 {
+			result := <-ch // Wait indefinitely
+			resp := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(result[0]), result[0], len(result[1]), result[1])
+			return resp
+		}
+		timer := time.NewTimer(time.Duration(timeoutSec * float64(time.Second)))
+		select {
+		case result := <-ch:
+			resp := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(result[0]), result[0], len(result[1]), result[1])
+			timer.Stop()
+			return resp
+		case <-timer.C:
+			// Remove this waiter from the queue
+			blpopMutex.Lock()
+			waiters := blpopWaiters[key]
+			for i, waiter := range waiters {
+				if waiter == ch {
+					blpopWaiters[key] = append(waiters[:i], waiters[i+1:]...)
+					break
+				}
+			}
+			blpopMutex.Unlock()
+			return "$-1\r\n"
+		}
 	case "rpush":
 		if len(args) < 3 {
 			return "-ERR wrong number of arguments for RPUSH command\r\n"
