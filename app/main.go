@@ -395,6 +395,50 @@ func handleCommand(args []string) string {
 		}
 		streamKey := args[1]
 		entryID := args[2]
+		if entryID == "*" {
+			idTime := time.Now().UnixNano() / int64(time.Millisecond)
+			storageMutex.Lock()
+			entries := streamStorage[streamKey]
+			maxSeq := int64(-1)
+			for _, e := range entries {
+				parts := strings.Split(e.ID, "-")
+				if len(parts) != 2 {
+					continue
+				}
+				t, _ := strconv.ParseInt(parts[0], 10, 64)
+				s, _ := strconv.ParseInt(parts[1], 10, 64)
+				if t == idTime && s > maxSeq {
+					maxSeq = s
+				}
+			}
+			var idSeq int64
+			if maxSeq < 0 {
+				idSeq = 0
+			} else {
+				idSeq = maxSeq + 1
+			}
+			entryID = fmt.Sprintf("%d-%d", idTime, idSeq)
+			// Validate ordering as before
+			if len(entries) > 0 {
+				lastID := entries[len(entries)-1].ID
+				lastParts := strings.Split(lastID, "-")
+				lastTime, _ := strconv.ParseInt(lastParts[0], 10, 64)
+				lastSeq, _ := strconv.ParseInt(lastParts[1], 10, 64)
+				if idTime < lastTime || (idTime == lastTime && idSeq <= lastSeq) {
+					storageMutex.Unlock()
+					return "-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n"
+				}
+			}
+			fields := make(map[string]string)
+			for i := 3; i < len(args); i += 2 {
+				fields[args[i]] = args[i+1]
+			}
+			entry := StreamEntry{ID: entryID, Fields: fields}
+			streamStorage[streamKey] = append(streamStorage[streamKey], entry)
+			storageMutex.Unlock()
+			return fmt.Sprintf("$%d\r\n%s\r\n", len(entryID), entryID)
+		}
+		// Handle explicit and partial auto-generated IDs
 		idParts := strings.Split(entryID, "-")
 		var idTime int64
 		var idSeq int64
