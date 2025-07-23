@@ -184,6 +184,31 @@ func handleCommand(args []string) string {
 		length := len(list)
 		storageMutex.Unlock()
 		return fmt.Sprintf(":%d\r\n", length)
+	case "lrange":
+		if len(args) != 4 {
+			return "-ERR wrong number of arguments for LRANGE command\r\n"
+		}
+		key := args[1]
+		start, err1 := strconv.Atoi(args[2])
+		stop, err2 := strconv.Atoi(args[3])
+		if err1 != nil || err2 != nil || start < 0 || stop < 0 {
+			return "-ERR start and stop must be non-negative integers\r\n"
+		}
+		storageMutex.RLock()
+		list, exists := listStorage[key]
+		storageMutex.RUnlock()
+		if !exists || start >= len(list) || start > stop {
+			return "*0\r\n"
+		}
+		if stop >= len(list) {
+			stop = len(list) - 1
+		}
+		result := list[start : stop+1]
+		resp := fmt.Sprintf("*%d\r\n", len(result))
+		for _, elem := range result {
+			resp += fmt.Sprintf("$%d\r\n%s\r\n", len(elem), elem)
+		}
+		return resp
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
 	}
