@@ -173,16 +173,13 @@ func handleCommand(args []string) string {
 			return "-ERR wrong number of arguments for RPUSH command\r\n"
 		}
 		key := args[1]
-		value := args[2]
+		elements := args[2:]
 		storageMutex.Lock()
 		list, exists := listStorage[key]
 		if !exists {
-			listStorage[key] = []string{value}
-			storageMutex.Unlock()
-			return ":1\r\n"
+			list = []string{}
 		}
-		// Append to existing list
-		list = append(list, value)
+		list = append(list, elements...)
 		listStorage[key] = list
 		length := len(list)
 		storageMutex.Unlock()
