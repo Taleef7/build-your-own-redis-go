@@ -597,53 +597,75 @@ func handleCommand(args []string) string {
 		}
 		return resp
 	case "xread":
-		// Only support: XREAD streams stream_key last_id
-		if len(args) != 4 || args[1] != "streams" {
+		// Support: XREAD streams stream1 stream2 ... id1 id2 ...
+		if len(args) < 4 || args[1] != "streams" {
 			return "-ERR wrong number of arguments for XREAD command\r\n"
 		}
-		streamKey := args[2]
-		lastID := args[3]
-		storageMutex.RLock()
-		entries := streamStorage[streamKey]
-		storageMutex.RUnlock()
-		// Parse lastID
-		lastParts := strings.Split(lastID, "-")
-		var lastT, lastS int64
-		if len(lastParts) == 2 {
-			lastT, _ = strconv.ParseInt(lastParts[0], 10, 64)
-			lastS, _ = strconv.ParseInt(lastParts[1], 10, 64)
-		} else {
-			lastT, _ = strconv.ParseInt(lastID, 10, 64)
-			lastS = 0
-		}
-		var entryArrs []string
-		for _, entry := range entries {
-			parts := strings.Split(entry.ID, "-")
-			if len(parts) != 2 {
-				continue
-			}
-			et, _ := strconv.ParseInt(parts[0], 10, 64)
-			es, _ := strconv.ParseInt(parts[1], 10, 64)
-			if et > lastT || (et == lastT && es > lastS) {
-				// Format entry as RESP array
-				entryResp := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n", len(entry.ID), entry.ID)
-				fields := make([]string, 0, len(entry.Fields)*2)
-				for k, v := range entry.Fields {
-					fields = append(fields, k, v)
-				}
-				fieldsResp := fmt.Sprintf("*%d\r\n", len(fields))
-				for _, fv := range fields {
-					fieldsResp += fmt.Sprintf("$%d\r\n%s\r\n", len(fv), fv)
-				}
-				entryResp += fieldsResp
-				entryArrs = append(entryArrs, entryResp)
+		// Find the index of "streams"
+		streamsStart := 2
+		idsStart := -1
+		for i := 2; i < len(args); i++ {
+			if args[i] == "streams" {
+				streamsStart = i + 1
+				break
 			}
 		}
-		// Outer structure: *1\r\n*2\r\n$len\r\nstream_key\r\n*len\r\n...entries...
-		resp := "*1\r\n"
-		resp += fmt.Sprintf("*2\r\n$%d\r\n%s\r\n*%d\r\n", len(streamKey), streamKey, len(entryArrs))
-		for _, e := range entryArrs {
-			resp += e
+		// streamsStart now points to the first stream name
+		// The IDs start after all stream names
+		// Find the split point (halfway)
+		streamCount := (len(args) - streamsStart) / 2
+		if streamCount == 0 || streamsStart+streamCount >= len(args) {
+			return "-ERR wrong number of arguments for XREAD command\r\n"
+		}
+		idsStart = streamsStart + streamCount
+		streams := args[streamsStart:idsStart]
+		ids := args[idsStart:]
+		if len(streams) != len(ids) {
+			return "-ERR number of streams and IDs must match\r\n"
+		}
+		resp := fmt.Sprintf("*%d\r\n", len(streams))
+		for i, streamKey := range streams {
+			lastID := ids[i]
+			storageMutex.RLock()
+			entries := streamStorage[streamKey]
+			storageMutex.RUnlock()
+			// Parse lastID
+			lastParts := strings.Split(lastID, "-")
+			var lastT, lastS int64
+			if len(lastParts) == 2 {
+				lastT, _ = strconv.ParseInt(lastParts[0], 10, 64)
+				lastS, _ = strconv.ParseInt(lastParts[1], 10, 64)
+			} else {
+				lastT, _ = strconv.ParseInt(lastID, 10, 64)
+				lastS = 0
+			}
+			var entryArrs []string
+			for _, entry := range entries {
+				parts := strings.Split(entry.ID, "-")
+				if len(parts) != 2 {
+					continue
+				}
+				et, _ := strconv.ParseInt(parts[0], 10, 64)
+				es, _ := strconv.ParseInt(parts[1], 10, 64)
+				if et > lastT || (et == lastT && es > lastS) {
+					// Format entry as RESP array
+					entryResp := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n", len(entry.ID), entry.ID)
+					fields := make([]string, 0, len(entry.Fields)*2)
+					for k, v := range entry.Fields {
+						fields = append(fields, k, v)
+					}
+					fieldsResp := fmt.Sprintf("*%d\r\n", len(fields))
+					for _, fv := range fields {
+						fieldsResp += fmt.Sprintf("$%d\r\n%s\r\n", len(fv), fv)
+					}
+					entryResp += fieldsResp
+					entryArrs = append(entryArrs, entryResp)
+				}
+			}
+			resp += fmt.Sprintf("*2\r\n$%d\r\n%s\r\n*%d\r\n", len(streamKey), streamKey, len(entryArrs))
+			for _, e := range entryArrs {
+				resp += e
+			}
 		}
 		return resp
 	default:
