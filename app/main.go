@@ -730,6 +730,10 @@ func handleCommand(args []string) string {
 				}
 			}(i, streamKey, ids[i])
 		}
+		if blockTimeout == 0 {
+			// Wait forever
+			return <-ch
+		}
 		timer := time.NewTimer(time.Duration(blockTimeout) * time.Millisecond)
 		select {
 		case r := <-ch:
