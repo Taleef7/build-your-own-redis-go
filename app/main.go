@@ -24,6 +24,7 @@ type StorageEntry struct {
 // Global storage for key-value pairs with mutex for thread safety
 var (
 	storage      = make(map[string]StorageEntry)
+	listStorage  = make(map[string][]string) // New map for lists
 	storageMutex sync.RWMutex
 )
 
@@ -167,6 +168,22 @@ func handleCommand(args []string) string {
 
 		// Return the value as a RESP bulk string
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(entry.value), entry.value)
+	case "rpush":
+		if len(args) < 3 {
+			return "-ERR wrong number of arguments for RPUSH command\r\n"
+		}
+		key := args[1]
+		value := args[2]
+		storageMutex.Lock()
+		_, exists := listStorage[key]
+		if !exists {
+			listStorage[key] = []string{value}
+			storageMutex.Unlock()
+			return ":1\r\n"
+		}
+		// For this stage, we only need to handle creating a new list, so just return error if it exists
+		storageMutex.Unlock()
+		return "-ERR RPUSH to existing list not supported in this stage\r\n"
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
 	}
