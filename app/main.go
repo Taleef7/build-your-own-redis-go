@@ -251,21 +251,47 @@ func handleCommand(args []string) string {
 		storageMutex.RUnlock()
 		return fmt.Sprintf(":%d\r\n", len(list))
 	case "lpop":
-		if len(args) != 2 {
+		if len(args) != 2 && len(args) != 3 {
 			return "-ERR wrong number of arguments for LPOP command\r\n"
 		}
 		key := args[1]
+		count := 1
+		if len(args) == 3 {
+			var err error
+			count, err = strconv.Atoi(args[2])
+			if err != nil || count < 1 {
+				return "-ERR count must be a positive integer\r\n"
+			}
+		}
 		storageMutex.Lock()
 		list := listStorage[key]
 		if len(list) == 0 {
 			storageMutex.Unlock()
+			if len(args) == 3 {
+				return "*0\r\n"
+			}
 			return "$-1\r\n"
 		}
-		removed := list[0]
-		list = list[1:]
+		if len(args) == 2 {
+			removed := list[0]
+			list = list[1:]
+			listStorage[key] = list
+			storageMutex.Unlock()
+			return fmt.Sprintf("$%d\r\n%s\r\n", len(removed), removed)
+		}
+		// Multi-element LPOP
+		if count > len(list) {
+			count = len(list)
+		}
+		removed := list[:count]
+		list = list[count:]
 		listStorage[key] = list
 		storageMutex.Unlock()
-		return fmt.Sprintf("$%d\r\n%s\r\n", len(removed), removed)
+		resp := fmt.Sprintf("*%d\r\n", len(removed))
+		for _, elem := range removed {
+			resp += fmt.Sprintf("$%d\r\n%s\r\n", len(elem), elem)
+		}
+		return resp
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
 	}
