@@ -184,6 +184,22 @@ func handleCommand(args []string) string {
 		length := len(list)
 		storageMutex.Unlock()
 		return fmt.Sprintf(":%d\r\n", length)
+	case "lpush":
+		if len(args) < 3 {
+			return "-ERR wrong number of arguments for LPUSH command\r\n"
+		}
+		key := args[1]
+		elements := args[2:]
+		storageMutex.Lock()
+		list := listStorage[key]
+		// Prepend elements in order (leftmost argument becomes new head)
+		for i := len(elements) - 1; i >= 0; i-- {
+			list = append([]string{elements[i]}, list...)
+		}
+		listStorage[key] = list
+		length := len(list)
+		storageMutex.Unlock()
+		return fmt.Sprintf(":%d\r\n", length)
 	case "lrange":
 		if len(args) != 4 {
 			return "-ERR wrong number of arguments for LRANGE command\r\n"
