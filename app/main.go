@@ -189,19 +189,35 @@ func handleCommand(args []string) string {
 			return "-ERR wrong number of arguments for LRANGE command\r\n"
 		}
 		key := args[1]
-		start, err1 := strconv.Atoi(args[2])
-		stop, err2 := strconv.Atoi(args[3])
-		if err1 != nil || err2 != nil || start < 0 || stop < 0 {
-			return "-ERR start and stop must be non-negative integers\r\n"
-		}
+		startRaw, err1 := strconv.Atoi(args[2])
+		stopRaw, err2 := strconv.Atoi(args[3])
 		storageMutex.RLock()
-		list, exists := listStorage[key]
+		list := listStorage[key]
 		storageMutex.RUnlock()
-		if !exists || start >= len(list) || start > stop {
+		listLen := len(list)
+		if err1 != nil || err2 != nil || listLen == 0 {
 			return "*0\r\n"
 		}
-		if stop >= len(list) {
-			stop = len(list) - 1
+		// Convert negative indexes
+		start := startRaw
+		stop := stopRaw
+		if start < 0 {
+			start = listLen + start
+			if start < 0 {
+				start = 0
+			}
+		}
+		if stop < 0 {
+			stop = listLen + stop
+			if stop < 0 {
+				stop = 0
+			}
+		}
+		if start > stop || start >= listLen {
+			return "*0\r\n"
+		}
+		if stop >= listLen {
+			stop = listLen - 1
 		}
 		result := list[start : stop+1]
 		resp := fmt.Sprintf("*%d\r\n", len(result))
