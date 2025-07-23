@@ -597,39 +597,45 @@ func handleCommand(args []string) string {
 		}
 		return resp
 	case "xread":
-		// Support: XREAD streams stream1 stream2 ... id1 id2 ...
-		if len(args) < 4 || args[1] != "streams" {
-			return "-ERR wrong number of arguments for XREAD command\r\n"
-		}
-		// Find the index of "streams"
-		streamsStart := 2
-		idsStart := -1
-		for i := 2; i < len(args); i++ {
-			if args[i] == "streams" {
-				streamsStart = i + 1
+		// Support: XREAD [BLOCK ms] streams stream1 stream2 ... id1 id2 ...
+		blockTimeout := int64(0)
+		blockIdx := -1
+		streamsIdx := -1
+		for i := 1; i < len(args); i++ {
+			if strings.ToLower(args[i]) == "block" && i+1 < len(args) {
+				blockIdx = i
+				blockTimeout, _ = strconv.ParseInt(args[i+1], 10, 64)
+				continue
+			}
+			if strings.ToLower(args[i]) == "streams" {
+				streamsIdx = i
 				break
 			}
 		}
-		// streamsStart now points to the first stream name
-		// The IDs start after all stream names
-		// Find the split point (halfway)
-		streamCount := (len(args) - streamsStart) / 2
-		if streamCount == 0 || streamsStart+streamCount >= len(args) {
+		if streamsIdx == -1 || streamsIdx+1 >= len(args) {
 			return "-ERR wrong number of arguments for XREAD command\r\n"
 		}
-		idsStart = streamsStart + streamCount
-		streams := args[streamsStart:idsStart]
-		ids := args[idsStart:]
+		streams := []string{}
+		ids := []string{}
+		for i := streamsIdx + 1; i < len(args); i++ {
+			if i-streamsIdx-1 < (len(args)-streamsIdx-1)/2 {
+				streams = append(streams, args[i])
+			} else {
+				ids = append(ids, args[i])
+			}
+		}
 		if len(streams) != len(ids) {
 			return "-ERR number of streams and IDs must match\r\n"
 		}
+		// Try to get entries immediately
+		found := false
 		resp := fmt.Sprintf("*%d\r\n", len(streams))
+		allEntryArrs := make([][]string, len(streams))
 		for i, streamKey := range streams {
 			lastID := ids[i]
 			storageMutex.RLock()
 			entries := streamStorage[streamKey]
 			storageMutex.RUnlock()
-			// Parse lastID
 			lastParts := strings.Split(lastID, "-")
 			var lastT, lastS int64
 			if len(lastParts) == 2 {
@@ -648,7 +654,6 @@ func handleCommand(args []string) string {
 				et, _ := strconv.ParseInt(parts[0], 10, 64)
 				es, _ := strconv.ParseInt(parts[1], 10, 64)
 				if et > lastT || (et == lastT && es > lastS) {
-					// Format entry as RESP array
 					entryResp := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n", len(entry.ID), entry.ID)
 					fields := make([]string, 0, len(entry.Fields)*2)
 					for k, v := range entry.Fields {
@@ -662,12 +667,77 @@ func handleCommand(args []string) string {
 					entryArrs = append(entryArrs, entryResp)
 				}
 			}
-			resp += fmt.Sprintf("*2\r\n$%d\r\n%s\r\n*%d\r\n", len(streamKey), streamKey, len(entryArrs))
-			for _, e := range entryArrs {
-				resp += e
+			if len(entryArrs) > 0 {
+				found = true
 			}
+			allEntryArrs[i] = entryArrs
 		}
-		return resp
+		if found || blockIdx == -1 {
+			// Return immediately if found or not blocking
+			resp = fmt.Sprintf("*%d\r\n", len(streams))
+			for i, streamKey := range streams {
+				entryArrs := allEntryArrs[i]
+				resp += fmt.Sprintf("*2\r\n$%d\r\n%s\r\n*%d\r\n", len(streamKey), streamKey, len(entryArrs))
+				for _, e := range entryArrs {
+					resp += e
+				}
+			}
+			return resp
+		}
+		// Blocking: set up a channel and wait for new entries or timeout
+		ch := make(chan string, 1)
+		for i, streamKey := range streams {
+			go func(idx int, key, lastID string) {
+				// Wait for a new entry to be added to this stream
+				for {
+					storageMutex.RLock()
+					entries := streamStorage[key]
+					storageMutex.RUnlock()
+					lastParts := strings.Split(lastID, "-")
+					var lastT, lastS int64
+					if len(lastParts) == 2 {
+						lastT, _ = strconv.ParseInt(lastParts[0], 10, 64)
+						lastS, _ = strconv.ParseInt(lastParts[1], 10, 64)
+					} else {
+						lastT, _ = strconv.ParseInt(lastID, 10, 64)
+						lastS = 0
+					}
+					for _, entry := range entries {
+						parts := strings.Split(entry.ID, "-")
+						if len(parts) != 2 {
+							continue
+						}
+						et, _ := strconv.ParseInt(parts[0], 10, 64)
+						es, _ := strconv.ParseInt(parts[1], 10, 64)
+						if et > lastT || (et == lastT && es > lastS) {
+							// Format and send the response for this stream only
+							entryResp := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n", len(entry.ID), entry.ID)
+							fields := make([]string, 0, len(entry.Fields)*2)
+							for k, v := range entry.Fields {
+								fields = append(fields, k, v)
+							}
+							fieldsResp := fmt.Sprintf("*%d\r\n", len(fields))
+							for _, fv := range fields {
+								fieldsResp += fmt.Sprintf("$%d\r\n%s\r\n", len(fv), fv)
+							}
+							entryResp += fieldsResp
+							resp := fmt.Sprintf("*1\r\n*2\r\n$%d\r\n%s\r\n*1\r\n%s", len(key), key, entryResp)
+							ch <- resp
+							return
+						}
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}(i, streamKey, ids[i])
+		}
+		timer := time.NewTimer(time.Duration(blockTimeout) * time.Millisecond)
+		select {
+		case r := <-ch:
+			timer.Stop()
+			return r
+		case <-timer.C:
+			return "$-1\r\n"
+		}
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
 	}
