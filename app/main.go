@@ -395,12 +395,36 @@ func handleCommand(args []string) string {
 		}
 		streamKey := args[1]
 		entryID := args[2]
+		// Validate ID format and ordering
+		idParts := strings.Split(entryID, "-")
+		if len(idParts) != 2 {
+			return "-ERR The ID specified in XADD must be greater than 0-0\r\n"
+		}
+		idTime, err1 := strconv.ParseInt(idParts[0], 10, 64)
+		idSeq, err2 := strconv.ParseInt(idParts[1], 10, 64)
+		if err1 != nil || err2 != nil || idTime < 0 || idSeq < 0 {
+			return "-ERR The ID specified in XADD must be greater than 0-0\r\n"
+		}
+		if idTime == 0 && idSeq == 0 {
+			return "-ERR The ID specified in XADD must be greater than 0-0\r\n"
+		}
+		storageMutex.Lock()
+		entries := streamStorage[streamKey]
+		if len(entries) > 0 {
+			lastID := entries[len(entries)-1].ID
+			lastParts := strings.Split(lastID, "-")
+			lastTime, _ := strconv.ParseInt(lastParts[0], 10, 64)
+			lastSeq, _ := strconv.ParseInt(lastParts[1], 10, 64)
+			if idTime < lastTime || (idTime == lastTime && idSeq <= lastSeq) {
+				storageMutex.Unlock()
+				return "-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n"
+			}
+		}
 		fields := make(map[string]string)
 		for i := 3; i < len(args); i += 2 {
 			fields[args[i]] = args[i+1]
 		}
 		entry := StreamEntry{ID: entryID, Fields: fields}
-		storageMutex.Lock()
 		streamStorage[streamKey] = append(streamStorage[streamKey], entry)
 		storageMutex.Unlock()
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(entryID), entryID)
