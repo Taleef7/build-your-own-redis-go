@@ -28,6 +28,14 @@ var (
 	storageMutex sync.RWMutex
 )
 
+// Stream support
+type StreamEntry struct {
+	ID     string
+	Fields map[string]string
+}
+
+var streamStorage = make(map[string][]StreamEntry)
+
 // For BLPOP: map from list key to a slice of waiting channels
 var blpopWaiters = make(map[string][]chan [2]string)
 var blpopMutex sync.Mutex
@@ -381,6 +389,21 @@ func handleCommand(args []string) string {
 			resp += fmt.Sprintf("$%d\r\n%s\r\n", len(elem), elem)
 		}
 		return resp
+	case "xadd":
+		if len(args) < 5 || (len(args)-3)%2 != 0 {
+			return "-ERR wrong number of arguments for XADD command\r\n"
+		}
+		streamKey := args[1]
+		entryID := args[2]
+		fields := make(map[string]string)
+		for i := 3; i < len(args); i += 2 {
+			fields[args[i]] = args[i+1]
+		}
+		entry := StreamEntry{ID: entryID, Fields: fields}
+		storageMutex.Lock()
+		streamStorage[streamKey] = append(streamStorage[streamKey], entry)
+		storageMutex.Unlock()
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(entryID), entryID)
 	case "type":
 		if len(args) != 2 {
 			return "-ERR wrong number of arguments for TYPE command\r\n"
@@ -388,9 +411,13 @@ func handleCommand(args []string) string {
 		key := args[1]
 		storageMutex.RLock()
 		_, exists := storage[key]
+		_, streamExists := streamStorage[key]
 		storageMutex.RUnlock()
 		if exists {
 			return "+string\r\n"
+		}
+		if streamExists {
+			return "+stream\r\n"
 		}
 		return "+none\r\n"
 	default:
