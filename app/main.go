@@ -28,6 +28,10 @@ var (
 	storageMutex sync.RWMutex
 )
 
+// For BLPOP: map from list key to a slice of waiting channels
+var blpopWaiters = make(map[string][]chan [2]string)
+var blpopMutex sync.Mutex
+
 func parseRESPArray(reader *bufio.Reader) ([]string, error) {
 	// Read the number of arguments (starts with *)
 	line, err := reader.ReadString('\n')
@@ -168,6 +172,34 @@ func handleCommand(args []string) string {
 
 		// Return the value as a RESP bulk string
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(entry.value), entry.value)
+	case "blpop":
+		if len(args) != 3 {
+			return "-ERR wrong number of arguments for BLPOP command\r\n"
+		}
+		key := args[1]
+		timeout := args[2] // always 0 for this stage
+		if timeout != "0" {
+			return "-ERR only timeout=0 supported in this stage\r\n"
+		}
+		storageMutex.Lock()
+		list := listStorage[key]
+		if len(list) > 0 {
+			removed := list[0]
+			list = list[1:]
+			listStorage[key] = list
+			storageMutex.Unlock()
+			resp := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(removed), removed)
+			return resp
+		}
+		storageMutex.Unlock()
+		// Block: create a channel, add to waiters, and wait
+		ch := make(chan [2]string)
+		blpopMutex.Lock()
+		blpopWaiters[key] = append(blpopWaiters[key], ch)
+		blpopMutex.Unlock()
+		result := <-ch // Wait until signaled
+		resp := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(result[0]), result[0], len(result[1]), result[1])
+		return resp
 	case "rpush":
 		if len(args) < 3 {
 			return "-ERR wrong number of arguments for RPUSH command\r\n"
@@ -179,6 +211,24 @@ func handleCommand(args []string) string {
 		if !exists {
 			list = []string{}
 		}
+		// Before appending, check for BLPOP waiters
+		blpopMutex.Lock()
+		waiters := blpopWaiters[key]
+		if len(waiters) > 0 {
+			ch := waiters[0]
+			blpopWaiters[key] = waiters[1:]
+			blpopMutex.Unlock()
+			ch <- [2]string{key, elements[0]}
+			if len(elements) > 1 {
+				// Only the first element goes to the waiter, the rest go to the list
+				list = append(list, elements[1:]...)
+				listStorage[key] = list
+			}
+			length := len(list) + 1 // +1 for the element sent to the waiter
+			storageMutex.Unlock()
+			return fmt.Sprintf(":%d\r\n", length)
+		}
+		blpopMutex.Unlock()
 		list = append(list, elements...)
 		listStorage[key] = list
 		length := len(list)
@@ -192,6 +242,24 @@ func handleCommand(args []string) string {
 		elements := args[2:]
 		storageMutex.Lock()
 		list := listStorage[key]
+		// Before prepending, check for BLPOP waiters
+		blpopMutex.Lock()
+		waiters := blpopWaiters[key]
+		if len(waiters) > 0 {
+			ch := waiters[0]
+			blpopWaiters[key] = waiters[1:]
+			blpopMutex.Unlock()
+			ch <- [2]string{key, elements[0]}
+			if len(elements) > 1 {
+				// Only the first element goes to the waiter, the rest go to the list
+				list = append(elements[1:], list...)
+				listStorage[key] = list
+			}
+			length := len(list) + 1 // +1 for the element sent to the waiter
+			storageMutex.Unlock()
+			return fmt.Sprintf(":%d\r\n", length)
+		}
+		blpopMutex.Unlock()
 		// Prepend elements in order (leftmost argument becomes new head)
 		for i := 0; i < len(elements); i++ {
 			list = append([]string{elements[i]}, list...)
