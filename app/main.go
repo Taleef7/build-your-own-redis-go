@@ -381,6 +381,18 @@ func handleCommand(args []string) string {
 			resp += fmt.Sprintf("$%d\r\n%s\r\n", len(elem), elem)
 		}
 		return resp
+	case "type":
+		if len(args) != 2 {
+			return "-ERR wrong number of arguments for TYPE command\r\n"
+		}
+		key := args[1]
+		storageMutex.RLock()
+		_, exists := storage[key]
+		storageMutex.RUnlock()
+		if exists {
+			return "+string\r\n"
+		}
+		return "+none\r\n"
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
 	}
