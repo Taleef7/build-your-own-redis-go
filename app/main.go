@@ -250,6 +250,22 @@ func handleCommand(args []string) string {
 		list := listStorage[key]
 		storageMutex.RUnlock()
 		return fmt.Sprintf(":%d\r\n", len(list))
+	case "lpop":
+		if len(args) != 2 {
+			return "-ERR wrong number of arguments for LPOP command\r\n"
+		}
+		key := args[1]
+		storageMutex.Lock()
+		list := listStorage[key]
+		if len(list) == 0 {
+			storageMutex.Unlock()
+			return "$-1\r\n"
+		}
+		removed := list[0]
+		list = list[1:]
+		listStorage[key] = list
+		storageMutex.Unlock()
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(removed), removed)
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
 	}
