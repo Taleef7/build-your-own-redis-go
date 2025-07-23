@@ -539,6 +539,63 @@ func handleCommand(args []string) string {
 			return "+stream\r\n"
 		}
 		return "+none\r\n"
+	case "xrange":
+		if len(args) != 4 {
+			return "-ERR wrong number of arguments for XRANGE command\r\n"
+		}
+		streamKey := args[1]
+		startID := args[2]
+		endID := args[3]
+		storageMutex.RLock()
+		entries := streamStorage[streamKey]
+		storageMutex.RUnlock()
+		// Parse start and end IDs
+		parseID := func(id string, isStart bool) (int64, int64) {
+			parts := strings.Split(id, "-")
+			if len(parts) == 1 {
+				t, _ := strconv.ParseInt(parts[0], 10, 64)
+				if isStart {
+					return t, 0
+				} else {
+					return t, 1<<63 - 1 // max int64
+				}
+			}
+			t, _ := strconv.ParseInt(parts[0], 10, 64)
+			s, _ := strconv.ParseInt(parts[1], 10, 64)
+			return t, s
+		}
+		startT, startS := parseID(startID, true)
+		endT, endS := parseID(endID, false)
+		resp := fmt.Sprintf("*%d\r\n", 0)
+		var resultEntries []string
+		for _, entry := range entries {
+			parts := strings.Split(entry.ID, "-")
+			if len(parts) != 2 {
+				continue
+			}
+			et, _ := strconv.ParseInt(parts[0], 10, 64)
+			es, _ := strconv.ParseInt(parts[1], 10, 64)
+			if (et > startT || (et == startT && es >= startS)) && (et < endT || (et == endT && es <= endS)) {
+				// Format entry as RESP array
+				entryResp := fmt.Sprintf("*2\r\n$%d\r\n%s\r\n", len(entry.ID), entry.ID)
+				// Fields as RESP array
+				fields := make([]string, 0, len(entry.Fields)*2)
+				for k, v := range entry.Fields {
+					fields = append(fields, k, v)
+				}
+				fieldsResp := fmt.Sprintf("*%d\r\n", len(fields))
+				for _, fv := range fields {
+					fieldsResp += fmt.Sprintf("$%d\r\n%s\r\n", len(fv), fv)
+				}
+				entryResp += fieldsResp
+				resultEntries = append(resultEntries, entryResp)
+			}
+		}
+		resp = fmt.Sprintf("*%d\r\n", len(resultEntries))
+		for _, e := range resultEntries {
+			resp += e
+		}
+		return resp
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
 	}
