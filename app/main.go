@@ -788,6 +788,10 @@ func handleCommand(args []string) string {
 		storage[key] = entry
 		storageMutex.Unlock()
 		return fmt.Sprintf(":%d\r\n", current)
+
+	case "multi":
+		// Start a transaction; for this stage just acknowledge with +OK
+		return "+OK\r\n"
 	}
 }
 
