@@ -759,7 +759,33 @@ func handleCommand(args []string) string {
 			return "$-1\r\n"
 		}
 	default:
-		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
+			return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
+
+	case "incr":
+		// INCR key
+		if len(args) != 2 {
+			return "-ERR wrong number of arguments for INCR command\r\n"
+		}
+		key := args[1]
+		// Read-modify-write with mutex
+		storageMutex.Lock()
+		entry, exists := storage[key]
+		if !exists {
+			storageMutex.Unlock()
+			// For stage 1 we only support when key exists and is numeric; return error
+			return "-ERR no such key\r\n"
+		}
+		// Try to parse current value as integer
+		current, err := strconv.ParseInt(entry.value, 10, 64)
+		if err != nil {
+			storageMutex.Unlock()
+			return "-ERR value is not an integer or out of range\r\n"
+		}
+		current++
+		entry.value = strconv.FormatInt(current, 10)
+		storage[key] = entry
+		storageMutex.Unlock()
+		return fmt.Sprintf(":%d\r\n", current)
 	}
 }
 
