@@ -759,7 +759,7 @@ func handleCommand(args []string) string {
 			return "$-1\r\n"
 		}
 	default:
-			return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
+		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
 
 	case "incr":
 		// INCR key
@@ -771,9 +771,11 @@ func handleCommand(args []string) string {
 		storageMutex.Lock()
 		entry, exists := storage[key]
 		if !exists {
+			// Key doesn't exist: create it with value "1" (stage 2 requirement)
+			entry = StorageEntry{value: "1", expiry: nil}
+			storage[key] = entry
 			storageMutex.Unlock()
-			// For stage 1 we only support when key exists and is numeric; return error
-			return "-ERR no such key\r\n"
+			return ":1\r\n"
 		}
 		// Try to parse current value as integer
 		current, err := strconv.ParseInt(entry.value, 10, 64)
