@@ -804,6 +804,8 @@ func handleClient(conn net.Conn) {
 
 	// Handle multiple commands from the same connection
 	reader := bufio.NewReader(conn)
+	inMulti := false
+	// queuedCommands := make([][]string, 0) // future: store queued commands per connection
 	for {
 		// Parse the RESP array (command and arguments)
 		args, err := parseRESPArray(reader)
@@ -812,7 +814,40 @@ func handleClient(conn net.Conn) {
 			break
 		}
 
-		// Handle the command and get response
+		if len(args) == 0 {
+			conn.Write([]byte("-ERR no command\r\n"))
+			continue
+		}
+
+		cmd := strings.ToLower(args[0])
+
+		// Connection-local transaction handling
+		if cmd == "multi" {
+			inMulti = true
+			conn.Write([]byte("+OK\r\n"))
+			continue
+		}
+
+		if cmd == "exec" {
+			if !inMulti {
+				conn.Write([]byte("-ERR EXEC without MULTI\r\n"))
+			} else {
+				// Empty transaction: return empty array and reset state
+				conn.Write([]byte("*0\r\n"))
+				inMulti = false
+				// queuedCommands = queuedCommands[:0]
+			}
+			continue
+		}
+
+		if inMulti {
+			// For now queueing is not implemented in this stage; acknowledge with QUEUED
+			conn.Write([]byte("+QUEUED\r\n"))
+			// queuedCommands = append(queuedCommands, args)
+			continue
+		}
+
+		// Not in MULTI: handle command immediately
 		response := handleCommand(args)
 
 		// Send the response
