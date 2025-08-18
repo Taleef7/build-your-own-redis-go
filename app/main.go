@@ -792,6 +792,10 @@ func handleCommand(args []string) string {
 	case "multi":
 		// Start a transaction; for this stage just acknowledge with +OK
 		return "+OK\r\n"
+
+	case "exec":
+		// If MULTI hasn't been called, return the exact error bytes required by tests
+		return "-ERR EXEC without MULTI\r\n"
 	}
 }
 
