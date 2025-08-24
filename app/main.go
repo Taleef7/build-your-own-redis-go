@@ -586,9 +586,9 @@ func handleCommand(args []string) string {
 			s, _ := strconv.ParseInt(parts[1], 10, 64)
 			return t, s
 		}
-	startT, startS := parseID(startID, true)
-	endT, endS := parseID(endID, false)
-	var resp string
+		startT, startS := parseID(startID, true)
+		endT, endS := parseID(endID, false)
+		var resp string
 		var resultEntries []string
 		for _, entry := range entries {
 			parts := strings.Split(entry.ID, "-")
@@ -649,9 +649,9 @@ func handleCommand(args []string) string {
 		if len(streams) != len(ids) {
 			return "-ERR number of streams and IDs must match\r\n"
 		}
-	// Try to get entries immediately
-	found := false
-	var resp string
+		// Try to get entries immediately
+		found := false
+		var resp string
 		allEntryArrs := make([][]string, len(streams))
 		for i, streamKey := range streams {
 			lastID := ids[i]
@@ -779,7 +779,7 @@ func handleCommand(args []string) string {
 			return r
 		case <-timer.C:
 			return "$-1\r\n"
-	}
+		}
 
 	case "incr":
 		// INCR key
@@ -936,6 +936,24 @@ func main() {
 		os.Exit(1)
 	}
 	defer l.Close()
+
+	// If running as a replica, initiate handshake with master by sending PING
+	if replicaMode {
+		parts := strings.Fields(*replicaOf)
+		if len(parts) == 2 {
+			masterAddr := fmt.Sprintf("%s:%s", parts[0], parts[1])
+			go func() {
+				conn, err := net.Dial("tcp", masterAddr)
+				if err != nil {
+					// Silent fail to avoid noisy logs in tests
+					return
+				}
+				// Send RESP array for PING
+				_, _ = conn.Write([]byte("*1\r\n$4\r\nPING\r\n"))
+				// Keep the connection open for future stages
+			}()
+		}
+	}
 
 	// Accept multiple connections concurrently
 	for {
