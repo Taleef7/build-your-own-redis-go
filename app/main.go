@@ -540,6 +540,16 @@ func handleCommand(args []string) string {
 			return "+stream\r\n"
 		}
 		return "+none\r\n"
+
+	case "info":
+		// Support only the "replication" section for now.
+		if len(args) >= 2 && strings.ToLower(args[1]) == "replication" {
+			body := "role:master"
+			return fmt.Sprintf("$%d\r\n%s\r\n", len(body), body)
+		}
+		// Default: return the replication role as well
+		body := "role:master"
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(body), body)
 	case "xrange":
 		if len(args) != 4 {
 			return "-ERR wrong number of arguments for XRANGE command\r\n"
