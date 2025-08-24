@@ -942,16 +942,30 @@ func main() {
 		parts := strings.Fields(*replicaOf)
 		if len(parts) == 2 {
 			masterAddr := fmt.Sprintf("%s:%s", parts[0], parts[1])
-			go func() {
+			go func(listenPort int) {
 				conn, err := net.Dial("tcp", masterAddr)
 				if err != nil {
 					// Silent fail to avoid noisy logs in tests
 					return
 				}
-				// Send RESP array for PING
+				// 1) Send RESP array for PING
 				_, _ = conn.Write([]byte("*1\r\n$4\r\nPING\r\n"))
+				// Read master's response line (e.g., +PONG)
+				rd := bufio.NewReader(conn)
+				_, _ = rd.ReadString('\n')
+
+				// 2a) REPLCONF listening-port <PORT>
+				pstr := strconv.Itoa(listenPort)
+				cmd1 := fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$%d\r\n%s\r\n", len(pstr), pstr)
+				_, _ = conn.Write([]byte(cmd1))
+				// Read +OK
+				_, _ = rd.ReadString('\n')
+
+				// 2b) REPLCONF capa psync2
+				cmd2 := "*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"
+				_, _ = conn.Write([]byte(cmd2))
 				// Keep the connection open for future stages
-			}()
+			}(*port)
 		}
 	}
 
