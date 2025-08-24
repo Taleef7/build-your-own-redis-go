@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -897,7 +898,11 @@ func main() {
 
 	// Uncomment this block to pass the first stage
 	//
-	l, err := net.Listen("tcp", "0.0.0.0:6379")
+	// Allow overriding the listen port via --port (default 6379)
+	port := flag.Int("port", 6379, "port to listen on")
+	flag.Parse()
+	addr := fmt.Sprintf("0.0.0.0:%d", *port)
+	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		fmt.Println("Failed to bind to port 6379")
 		os.Exit(1)
