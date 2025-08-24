@@ -32,8 +32,6 @@ var (
 // replicaMode is true when server started with --replicaof
 var replicaMode bool
 
-// replicaOf holds the master address string when provided (e.g. "localhost 6379")
-var replicaOf string
 
 // Stream support
 type StreamEntry struct {
@@ -548,14 +546,15 @@ func handleCommand(args []string) string {
 		return "+none\r\n"
 
 	case "info":
-		// If no section provided or not "replication", return empty bulk string for now
+		// Only the replication section is required for these stages
 		if len(args) >= 2 && strings.ToLower(args[1]) == "replication" {
-			body := "role:master\r\n"
+			val := "role:master"
 			if replicaMode {
-				body = "role:slave\r\n"
+				val = "role:slave"
 			}
-			return fmt.Sprintf("$%d\r\n%s", len(body), body)
+			return fmt.Sprintf("$%d\r\n%s\r\n", len(val), val)
 		}
+		// Unused sections -> empty bulk string
 		return "$0\r\n"
 	case "xrange":
 		if len(args) != 4 {
@@ -919,11 +918,15 @@ func main() {
 	//
 	// Allow overriding the listen port via --port (default 6379)
 	port := flag.Int("port", 6379, "port to listen on")
+	replicaOf := flag.String("replicaof", "", "<host> <port> of master to replicate")
 	flag.Parse()
+	if *replicaOf != "" {
+		replicaMode = true
+	}
 	addr := fmt.Sprintf("0.0.0.0:%d", *port)
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
-		fmt.Println("Failed to bind to port 6379")
+		fmt.Printf("Failed to bind to port %d\n", *port)
 		os.Exit(1)
 	}
 	defer l.Close()
