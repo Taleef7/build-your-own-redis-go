@@ -830,6 +830,19 @@ func handleClient(conn net.Conn) {
 			continue
 		}
 
+		// DISCARD: abort transaction
+		if cmd == "discard" {
+			if !inMulti {
+				conn.Write([]byte("-ERR DISCARD without MULTI\r\n"))
+				continue
+			}
+			// Abort transaction
+			inMulti = false
+			queuedCommands = nil
+			conn.Write([]byte("+OK\r\n"))
+			continue
+		}
+
 		// Execute transaction
 		if cmd == "exec" {
 			if !inMulti {
