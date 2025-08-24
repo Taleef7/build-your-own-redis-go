@@ -548,14 +548,15 @@ func handleCommand(args []string) string {
 		return "+none\r\n"
 
 	case "info":
-		// Support only the "replication" section for now.
+		// If no section provided or not "replication", return empty bulk string for now
 		if len(args) >= 2 && strings.ToLower(args[1]) == "replication" {
-			body := "role:master"
-			return fmt.Sprintf("$%d\r\n%s\r\n", len(body), body)
+			body := "role:master\r\n"
+			if replicaMode {
+				body = "role:slave\r\n"
+			}
+			return fmt.Sprintf("$%d\r\n%s", len(body), body)
 		}
-		// Default: return the replication role as well
-		body := "role:master"
-		return fmt.Sprintf("$%d\r\n%s\r\n", len(body), body)
+		return "$0\r\n"
 	case "xrange":
 		if len(args) != 4 {
 			return "-ERR wrong number of arguments for XRANGE command\r\n"
@@ -813,18 +814,9 @@ func handleCommand(args []string) string {
 	case "exec":
 		// If MULTI hasn't been called, return the exact error bytes required by tests
 		return "-ERR EXEC without MULTI\r\n"
-
 	// INFO command: support `INFO replication` returning role
-	case "info":
-		// If no section provided or not "replication", return empty bulk string for now
-		if len(args) >= 2 && strings.ToLower(args[1]) == "replication" {
-			body := "role:master\r\n"
-			if replicaMode {
-				body = "role:slave\r\n"
-			}
-			return fmt.Sprintf("$%d\r\n%s", len(body), body)
-		}
-		return "$0\r\n"
+	// (handled above)
+}
 }
 
 func handleClient(conn net.Conn) {
