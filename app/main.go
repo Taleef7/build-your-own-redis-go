@@ -32,7 +32,6 @@ var (
 // replicaMode is true when server started with --replicaof
 var replicaMode bool
 
-
 // Stream support
 type StreamEntry struct {
 	ID     string
@@ -44,6 +43,10 @@ var streamStorage = make(map[string][]StreamEntry)
 // For BLPOP: map from list key to a slice of waiting channels
 var blpopWaiters = make(map[string][]chan [2]string)
 var blpopMutex sync.Mutex
+
+// Replication metadata (initialized at startup)
+var masterReplID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
+var masterReplOffset int64 = 0
 
 func parseRESPArray(reader *bufio.Reader) ([]string, error) {
 	// Read the number of arguments (starts with *)
@@ -548,11 +551,13 @@ func handleCommand(args []string) string {
 	case "info":
 		// Only the replication section is required for these stages
 		if len(args) >= 2 && strings.ToLower(args[1]) == "replication" {
-			val := "role:master"
+			role := "master"
 			if replicaMode {
-				val = "role:slave"
+				role = "slave"
 			}
-			return fmt.Sprintf("$%d\r\n%s\r\n", len(val), val)
+			// Build multiline body: each line ends with \r\n; last line should not count its trailing CRLF in length, but must be sent
+			body := fmt.Sprintf("role:%s\r\nmaster_replid:%s\r\nmaster_repl_offset:%d", role, masterReplID, masterReplOffset)
+			return fmt.Sprintf("$%d\r\n%s\r\n", len(body), body)
 		}
 		// Unused sections -> empty bulk string
 		return "$0\r\n"
@@ -581,9 +586,9 @@ func handleCommand(args []string) string {
 			s, _ := strconv.ParseInt(parts[1], 10, 64)
 			return t, s
 		}
-		startT, startS := parseID(startID, true)
-		endT, endS := parseID(endID, false)
-		resp := fmt.Sprintf("*%d\r\n", 0)
+	startT, startS := parseID(startID, true)
+	endT, endS := parseID(endID, false)
+	var resp string
 		var resultEntries []string
 		for _, entry := range entries {
 			parts := strings.Split(entry.ID, "-")
@@ -644,9 +649,9 @@ func handleCommand(args []string) string {
 		if len(streams) != len(ids) {
 			return "-ERR number of streams and IDs must match\r\n"
 		}
-		// Try to get entries immediately
-		found := false
-		resp := fmt.Sprintf("*%d\r\n", len(streams))
+	// Try to get entries immediately
+	found := false
+	var resp string
 		allEntryArrs := make([][]string, len(streams))
 		for i, streamKey := range streams {
 			lastID := ids[i]
@@ -774,9 +779,7 @@ func handleCommand(args []string) string {
 			return r
 		case <-timer.C:
 			return "$-1\r\n"
-		}
-	default:
-		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
+	}
 
 	case "incr":
 		// INCR key
@@ -813,9 +816,12 @@ func handleCommand(args []string) string {
 	case "exec":
 		// If MULTI hasn't been called, return the exact error bytes required by tests
 		return "-ERR EXEC without MULTI\r\n"
-	// INFO command: support `INFO replication` returning role
-	// (handled above)
-}
+
+	default:
+		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
+		// INFO command: support `INFO replication` returning role
+		// (handled above)
+	}
 }
 
 func handleClient(conn net.Conn) {
