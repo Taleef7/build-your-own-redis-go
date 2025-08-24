@@ -805,7 +805,8 @@ func handleClient(conn net.Conn) {
 	// Handle multiple commands from the same connection
 	reader := bufio.NewReader(conn)
 	inMulti := false
-	// queuedCommands := make([][]string, 0) // future: store queued commands per connection
+	var queuedCommands [][]string
+
 	for {
 		// Parse the RESP array (command and arguments)
 		args, err := parseRESPArray(reader)
@@ -821,29 +822,51 @@ func handleClient(conn net.Conn) {
 
 		cmd := strings.ToLower(args[0])
 
-		// Connection-local transaction handling
+		// Start transaction
 		if cmd == "multi" {
 			inMulti = true
+			queuedCommands = nil
 			conn.Write([]byte("+OK\r\n"))
 			continue
 		}
 
+		// Execute transaction
 		if cmd == "exec" {
 			if !inMulti {
 				conn.Write([]byte("-ERR EXEC without MULTI\r\n"))
-			} else {
-				// Empty transaction: return empty array and reset state
-				conn.Write([]byte("*0\r\n"))
-				inMulti = false
-				// queuedCommands = queuedCommands[:0]
+				continue
 			}
+
+			if len(queuedCommands) == 0 {
+				// Empty transaction
+				inMulti = false
+				conn.Write([]byte("*0\r\n"))
+				continue
+			}
+
+			// Execute queued commands and collect their raw RESP replies
+			responses := make([]string, 0, len(queuedCommands))
+			for _, q := range queuedCommands {
+				responses = append(responses, handleCommand(q))
+			}
+
+			// Reset transaction state
+			inMulti = false
+			queuedCommands = nil
+
+			// Build RESP array where each element is the raw reply for a queued command
+			resp := fmt.Sprintf("*%d\r\n", len(responses))
+			for _, r := range responses {
+				resp += r
+			}
+			conn.Write([]byte(resp))
 			continue
 		}
 
 		if inMulti {
-			// For now queueing is not implemented in this stage; acknowledge with QUEUED
+			// Queue the command and respond with QUEUED
+			queuedCommands = append(queuedCommands, args)
 			conn.Write([]byte("+QUEUED\r\n"))
-			// queuedCommands = append(queuedCommands, args)
 			continue
 		}
 
