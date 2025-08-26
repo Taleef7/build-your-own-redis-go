@@ -561,6 +561,10 @@ func handleCommand(args []string) string {
 		}
 		// Unused sections -> empty bulk string
 		return "$0\r\n"
+
+	case "replconf":
+		// For this stage, ignore arguments and acknowledge with +OK
+		return "+OK\r\n"
 	case "xrange":
 		if len(args) != 4 {
 			return "-ERR wrong number of arguments for XRANGE command\r\n"
