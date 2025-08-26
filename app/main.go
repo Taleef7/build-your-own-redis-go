@@ -565,6 +565,10 @@ func handleCommand(args []string) string {
 	case "replconf":
 		// For this stage, ignore arguments and acknowledge with +OK
 		return "+OK\r\n"
+
+	case "psync":
+		// Replica initial sync request -> reply with FULLRESYNC <REPL_ID> 0
+		return fmt.Sprintf("+FULLRESYNC %s %d\r\n", masterReplID, masterReplOffset)
 	case "xrange":
 		if len(args) != 4 {
 			return "-ERR wrong number of arguments for XRANGE command\r\n"
