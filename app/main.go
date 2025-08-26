@@ -964,6 +964,18 @@ func main() {
 				// 2b) REPLCONF capa psync2
 				cmd2 := "*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"
 				_, _ = conn.Write([]byte(cmd2))
+				// Read +OK
+				_, _ = rd.ReadString('\n')
+
+				// 2c) REPLCONF capa eof (some masters expect this capability too)
+				cmd3 := "*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$3\r\neof\r\n"
+				_, _ = conn.Write([]byte(cmd3))
+				// Read +OK
+				_, _ = rd.ReadString('\n')
+
+				// 3) PSYNC ? -1
+				psync := "*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"
+				_, _ = conn.Write([]byte(psync))
 				// Keep the connection open for future stages
 			}(*port)
 		}
