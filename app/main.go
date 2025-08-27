@@ -909,8 +909,11 @@ func handleCommand(args []string) string {
 		return "-ERR EXEC without MULTI\r\n"
 
 	case "wait":
-		// Stage: WAIT with no replicas — always return 0 as RESP integer
-		return ":0\r\n"
+		// Return the number of connected replicas as RESP integer
+		replicaConnsMutex.Lock()
+		cnt := len(replicaConns)
+		replicaConnsMutex.Unlock()
+		return fmt.Sprintf(":%d\r\n", cnt)
 
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
