@@ -56,6 +56,10 @@ var masterReplOffset int64 = 0
 var emptyRDBData []byte
 var emptyRDBOnce sync.Once
 
+// RDB configuration parameters
+var rdbDir string
+var rdbFilename string
+
 func getEmptyRDB() []byte {
 	emptyRDBOnce.Do(func() {
 		// This is a minimal valid empty RDB (from challenge hints)
@@ -667,6 +671,25 @@ func handleCommand(args []string) string {
 		// Unused sections -> empty bulk string
 		return "$0\r\n"
 
+	case "config":
+		// Support: CONFIG GET <param>
+		if len(args) >= 3 && strings.ToLower(args[1]) == "get" {
+			param := strings.ToLower(args[2])
+			switch param {
+			case "dir":
+				name := "dir"
+				val := rdbDir
+				return fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(name), name, len(val), val)
+			case "dbfilename":
+				name := "dbfilename"
+				val := rdbFilename
+				return fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(name), name, len(val), val)
+			default:
+				return "*0\r\n"
+			}
+		}
+		return "-ERR wrong number of arguments for CONFIG GET\r\n"
+
 	case "replconf":
 		// For this stage, ignore arguments and acknowledge with +OK
 		return "+OK\r\n"
@@ -1135,10 +1158,16 @@ func main() {
 	// Allow overriding the listen port via --port (default 6379)
 	port := flag.Int("port", 6379, "port to listen on")
 	replicaOf := flag.String("replicaof", "", "<host> <port> of master to replicate")
+	// RDB persistence flags
+	dirFlag := flag.String("dir", "", "directory where RDB file is stored")
+	dbfileFlag := flag.String("dbfilename", "", "RDB filename")
 	flag.Parse()
 	if *replicaOf != "" {
 		replicaMode = true
 	}
+	// Store RDB config (empty is allowed)
+	rdbDir = *dirFlag
+	rdbFilename = *dbfileFlag
 	addr := fmt.Sprintf("0.0.0.0:%d", *port)
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
