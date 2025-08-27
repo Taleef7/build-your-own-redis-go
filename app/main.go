@@ -908,6 +908,10 @@ func handleCommand(args []string) string {
 		// If MULTI hasn't been called, return the exact error bytes required by tests
 		return "-ERR EXEC without MULTI\r\n"
 
+	case "wait":
+		// Stage: WAIT with no replicas — always return 0 as RESP integer
+		return ":0\r\n"
+
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
 		// INFO command: support `INFO replication` returning role
