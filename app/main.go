@@ -40,6 +40,8 @@ type StreamEntry struct {
 	Fields map[string]string
 }
 
+	// Replication WAIT support: last write offset produced by this client
+	var lastWriteOffset int64 = -1
 var streamStorage = make(map[string][]StreamEntry)
 
 // For BLPOP: map from list key to a slice of waiting channels
@@ -71,6 +73,8 @@ func getEmptyRDB() []byte {
 // Track replica connections for command propagation
 var replicaConns []net.Conn
 var replicaConnsMutex sync.Mutex
+// Track last acknowledged offsets from replicas (by connection)
+var replicaAckOffsets = make(map[net.Conn]int64)
 
 // Helper to encode a RESP array
 func encodeRESPArray(args []string) []byte {
@@ -110,6 +114,8 @@ func propagateToReplicas(args []string) {
 			dead = append(dead, c)
 		}
 	}
+	// Increase the global replication stream offset once per command
+	masterReplOffset += int64(len(payload))
 	if len(dead) > 0 {
 		// Prune dead connections
 		replicaConnsMutex.Lock()
@@ -127,7 +133,23 @@ func propagateToReplicas(args []string) {
 			}
 		}
 		replicaConns = filtered
+		// Remove their ack offsets as well
+		for _, d := range dead {
+			delete(replicaAckOffsets, d)
+		}
 		replicaConnsMutex.Unlock()
+	}
+}
+
+// Ask replicas to send their current processed offsets
+func requestReplicaAcks() {
+	replicaConnsMutex.Lock()
+	targets := make([]net.Conn, len(replicaConns))
+	copy(targets, replicaConns)
+	replicaConnsMutex.Unlock()
+	getack := encodeRESPArray([]string{"REPLCONF", "GETACK", "*"})
+	for _, c := range targets {
+		_, _ = c.Write(getack)
 	}
 }
 
@@ -135,7 +157,7 @@ func parseRESPArray(reader *bufio.Reader) ([]string, error) {
 	// Read the number of arguments (starts with *)
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		return nil, err
+	return nil, err
 	}
 
 	// Check if it's a RESP array (starts with *)
@@ -945,6 +967,18 @@ func handleClient(conn net.Conn) {
 
 		cmd := strings.ToLower(args[0])
 
+		// If this is a replica connection sending its ACK, record and continue
+		if cmd == "replconf" && len(args) >= 3 && strings.ToLower(args[1]) == "ack" {
+			// args[2] is offset
+			if off, err := strconv.ParseInt(args[2], 10, 64); err == nil {
+				replicaConnsMutex.Lock()
+				replicaAckOffsets[conn] = off
+				replicaConnsMutex.Unlock()
+			}
+			// No response required to ACK
+			continue
+		}
+
 		// PSYNC handshake (master side): reply FULLRESYNC and then stream an empty RDB
 		if cmd == "psync" {
 			// Respond with FULLRESYNC <REPL_ID> 0\r\n
@@ -956,6 +990,7 @@ func handleClient(conn net.Conn) {
 			// Register this connection as a replica target for propagation
 			replicaConnsMutex.Lock()
 			replicaConns = append(replicaConns, conn)
+			replicaAckOffsets[conn] = 0
 			replicaConnsMutex.Unlock()
 			// After sending RDB, keep the connection open for future stages
 			continue
