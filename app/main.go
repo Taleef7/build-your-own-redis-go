@@ -1015,7 +1015,6 @@ func handleClient(conn net.Conn) {
 			continue
 		}
 
-
 		// Not in MULTI: handle command immediately
 		response := handleCommand(args)
 
@@ -1112,11 +1111,17 @@ func main() {
 						remaining -= n
 					}
 				}
-				// 4) Now continuously read propagated commands (RESP arrays) and apply silently
+				// 4) Now continuously read propagated commands (RESP arrays)
 				for {
 					cmdArgs, err := parseRESPArray(rd)
 					if err != nil {
 						return
+					}
+					if len(cmdArgs) >= 2 && strings.ToLower(cmdArgs[0]) == "replconf" && strings.ToLower(cmdArgs[1]) == "getack" {
+						// Respond with REPLCONF ACK 0 (offset hardcoded to 0 for this stage)
+						ack := encodeRESPArray([]string{"REPLCONF", "ACK", "0"})
+						_, _ = conn.Write(ack)
+						continue
 					}
 					// Apply to local state without sending any response to master
 					_ = handleCommand(cmdArgs)
