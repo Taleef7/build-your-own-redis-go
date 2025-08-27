@@ -951,6 +951,8 @@ func handleClient(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 	inMulti := false
 	var queuedCommands [][]string
+	// Track the last produced replication stream offset for this client's writes
+	var lastWriteOffset int64 = -1
 
 	for {
 		// Parse the RESP array (command and arguments)
@@ -1057,6 +1059,58 @@ func handleClient(conn net.Conn) {
 			continue
 		}
 
+		// Special-case WAIT to coordinate with replica ACKs
+		if cmd == "wait" {
+			// WAIT numreplicas timeout(ms)
+			// If no prior writes from this client, return current connected replicas immediately
+			replicaConnsMutex.Lock()
+			currentReplicas := len(replicaConns)
+			replicaConnsMutex.Unlock()
+			if lastWriteOffset < 0 {
+				conn.Write([]byte(fmt.Sprintf(":%d\r\n", currentReplicas)))
+				continue
+			}
+			// Parse args
+			required := 0
+			timeoutMs := 0
+			if len(args) >= 2 {
+				required, _ = strconv.Atoi(args[1])
+			}
+			if len(args) >= 3 {
+				timeoutMs, _ = strconv.Atoi(args[2])
+			}
+			// Helper to count replicas that have acked >= lastWriteOffset
+			countAcked := func() int {
+				replicaConnsMutex.Lock()
+				defer replicaConnsMutex.Unlock()
+				count := 0
+				for _, c := range replicaConns {
+					if off, ok := replicaAckOffsets[c]; ok && off >= lastWriteOffset {
+						count++
+					}
+				}
+				return count
+			}
+			// Immediate count
+			acked := countAcked()
+			if acked >= required {
+				conn.Write([]byte(fmt.Sprintf(":%d\r\n", acked)))
+				continue
+			}
+			// Poll until timeout
+			deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
+			for {
+				requestReplicaAcks()
+				time.Sleep(20 * time.Millisecond)
+				acked = countAcked()
+				if acked >= required || time.Now().After(deadline) {
+					conn.Write([]byte(fmt.Sprintf(":%d\r\n", acked)))
+					break
+				}
+			}
+			continue
+		}
+
 		// Not in MULTI: handle command immediately
 		response := handleCommand(args)
 
@@ -1066,6 +1120,8 @@ func handleClient(conn net.Conn) {
 		// After successful write commands, propagate to replicas (masters only)
 		if !replicaMode && isWriteCommand(args) {
 			propagateToReplicas(args)
+			// Record the offset after producing this write in the stream
+			lastWriteOffset = masterReplOffset
 		}
 	}
 }
@@ -1095,7 +1151,7 @@ func main() {
 	if replicaMode {
 		parts := strings.Fields(*replicaOf)
 		if len(parts) == 2 {
-			masterAddr := fmt.Sprintf("%s:%s", parts[0], parts[1])
+			masterAddr := net.JoinHostPort(parts[0], parts[1])
 			go func(listenPort int) {
 				conn, err := net.Dial("tcp", masterAddr)
 				if err != nil {
