@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -1082,7 +1083,44 @@ func main() {
 				// 3) PSYNC ? -1
 				psync := "*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"
 				_, _ = conn.Write([]byte(psync))
-				// Keep the connection open for future stages
+				// After PSYNC, master sends +FULLRESYNC ... and an RDB bulk payload, then streamed commands.
+				// 1) Read FULLRESYNC line
+				_, _ = rd.ReadString('\n')
+				// 2) Read bulk length line like $<len>\r\n
+				lenLine, err := rd.ReadString('\n')
+				if err != nil || !strings.HasPrefix(lenLine, "$") {
+					return
+				}
+				trim := strings.TrimSpace(strings.TrimPrefix(lenLine, "$"))
+				rdbLen, err := strconv.Atoi(trim)
+				if err != nil {
+					return
+				}
+				// 3) Read exactly rdbLen bytes (no trailing CRLF per spec in challenge)
+				if rdbLen > 0 {
+					remaining := rdbLen
+					buf := make([]byte, 4096)
+					for remaining > 0 {
+						toRead := remaining
+						if toRead > len(buf) {
+							toRead = len(buf)
+						}
+						n, err := io.ReadFull(rd, buf[:toRead])
+						if err != nil {
+							return
+						}
+						remaining -= n
+					}
+				}
+				// 4) Now continuously read propagated commands (RESP arrays) and apply silently
+				for {
+					cmdArgs, err := parseRESPArray(rd)
+					if err != nil {
+						return
+					}
+					// Apply to local state without sending any response to master
+					_ = handleCommand(cmdArgs)
+				}
 			}(*port)
 		}
 	}
