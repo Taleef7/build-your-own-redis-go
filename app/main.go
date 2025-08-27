@@ -1112,19 +1112,68 @@ func main() {
 					}
 				}
 				// 4) Now continuously read propagated commands (RESP arrays)
+				// Maintain a running byte offset of processed commands
+				var replOffset int64 = 0
+				parseWithCount := func(r *bufio.Reader) ([]string, int, error) {
+					consumed := 0
+					line, err := r.ReadString('\n')
+					if err != nil {
+						return nil, consumed, err
+					}
+					consumed += len(line)
+					if !strings.HasPrefix(line, "*") {
+						return nil, consumed, fmt.Errorf("expected array, got: %s", line)
+					}
+					argCount, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "*")))
+					if err != nil {
+						return nil, consumed, err
+					}
+					out := make([]string, argCount)
+					for i := 0; i < argCount; i++ {
+						argLenLine, err := r.ReadString('\n')
+						if err != nil {
+							return nil, consumed, err
+						}
+						consumed += len(argLenLine)
+						if !strings.HasPrefix(argLenLine, "$") {
+							return nil, consumed, fmt.Errorf("expected bulk string, got: %s", argLenLine)
+						}
+						argLen, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(argLenLine, "$")))
+						if err != nil {
+							return nil, consumed, err
+						}
+						buf := make([]byte, argLen)
+						n, err := io.ReadFull(r, buf)
+						if err != nil {
+							return nil, consumed, err
+						}
+						consumed += n
+						tail, err := r.ReadString('\n')
+						if err != nil {
+							return nil, consumed, err
+						}
+						consumed += len(tail)
+						out[i] = string(buf)
+					}
+					return out, consumed, nil
+				}
+
 				for {
-					cmdArgs, err := parseRESPArray(rd)
+					cmdArgs, consumed, err := parseWithCount(rd)
 					if err != nil {
 						return
 					}
 					if len(cmdArgs) >= 2 && strings.ToLower(cmdArgs[0]) == "replconf" && strings.ToLower(cmdArgs[1]) == "getack" {
-						// Respond with REPLCONF ACK 0 (offset hardcoded to 0 for this stage)
-						ack := encodeRESPArray([]string{"REPLCONF", "ACK", "0"})
+						// Reply with current offset before including this GETACK's bytes
+						ack := encodeRESPArray([]string{"REPLCONF", "ACK", strconv.FormatInt(replOffset, 10)})
 						_, _ = conn.Write(ack)
+						// Now count this GETACK command as processed
+						replOffset += int64(consumed)
 						continue
 					}
 					// Apply to local state without sending any response to master
 					_ = handleCommand(cmdArgs)
+					replOffset += int64(consumed)
 				}
 			}(*port)
 		}
