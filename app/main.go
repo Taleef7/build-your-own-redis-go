@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,8 +41,6 @@ type StreamEntry struct {
 	Fields map[string]string
 }
 
-	// Replication WAIT support: last write offset produced by this client
-	var lastWriteOffset int64 = -1
 var streamStorage = make(map[string][]StreamEntry)
 
 // For BLPOP: map from list key to a slice of waiting channels
@@ -57,8 +56,8 @@ var emptyRDBData []byte
 var emptyRDBOnce sync.Once
 
 // RDB configuration parameters
-var rdbDir string
-var rdbFilename string
+var rdbDir string = ""
+var rdbFilename string = ""
 
 func getEmptyRDB() []byte {
 	emptyRDBOnce.Do(func() {
@@ -79,6 +78,144 @@ var replicaConns []net.Conn
 var replicaConnsMutex sync.Mutex
 // Track last acknowledged offsets from replicas (by connection)
 var replicaAckOffsets = make(map[net.Conn]int64)
+
+// (rdbDir and rdbFilename declared above under RDB configuration parameters)
+
+// Minimal RDB loader: parse only enough to read string keys from REDIS0011 files
+func loadRDB(dir, filename string) {
+	if dir == "" || filename == "" {
+		return
+	}
+	path := filepath.Join(dir, filename)
+	f, err := os.Open(path)
+	if err != nil {
+		// File may not exist; that's okay
+		return
+	}
+	defer f.Close()
+	rd := bufio.NewReader(f)
+
+	// Header: 5 bytes "REDIS" + 4 bytes version
+	hdr := make([]byte, 5)
+	if _, err := io.ReadFull(rd, hdr); err != nil || string(hdr) != "REDIS" {
+		return
+	}
+	ver := make([]byte, 4)
+	if _, err := io.ReadFull(rd, ver); err != nil {
+		return
+	}
+	// Loop through sections
+	for {
+		b, err := rd.ReadByte()
+		if err != nil {
+			return
+		}
+		switch b {
+		case 0xFA: // AUX: two strings
+			_ = rdbReadString(rd)
+			_ = rdbReadString(rd)
+		case 0xFE: // SELECTDB
+			_ = rdbReadLength(rd)
+		case 0xFB: // RESIZEDB
+			_ = rdbReadLength(rd)
+			_ = rdbReadLength(rd)
+		case 0xFD: // EXPIRETIME (seconds)
+			// skip 4 bytes
+			if _, err := io.CopyN(io.Discard, rd, 4); err != nil { return }
+			// next should be a type byte; continue loop to read it
+		case 0xFC: // EXPIRETIME_MS (milliseconds)
+			if _, err := io.CopyN(io.Discard, rd, 8); err != nil { return }
+		case 0xFF: // EOF
+			// read checksum (8 bytes) if present
+			_, _ = io.CopyN(io.Discard, rd, 8)
+			return
+		default:
+			// Treat as value type; 0 = string key/value
+			if b == 0x00 {
+				key := rdbReadString(rd)
+				val := rdbReadString(rd)
+				if key != nil && val != nil {
+					storageMutex.Lock()
+					storage[string(key)] = StorageEntry{value: string(val), expiry: nil}
+					storageMutex.Unlock()
+				}
+			} else {
+				// Unsupported type: skip conservatively by abandoning parse
+				return
+			}
+		}
+	}
+}
+
+// rdbReadLength parses the RDB length-encoding and returns the length as int
+func rdbReadLength(r *bufio.Reader) int {
+	b, err := r.ReadByte()
+	if err != nil { return 0 }
+	enc := (b & 0xC0) >> 6
+	if enc == 0 { // 6-bit
+		return int(b & 0x3F)
+	}
+	if enc == 1 { // 14-bit
+		b2, _ := r.ReadByte()
+		return int(((int(b) & 0x3F) << 8) | int(b2))
+	}
+	if enc == 2 { // 32-bit big-endian
+		buf := make([]byte, 4)
+		if _, err := io.ReadFull(r, buf); err != nil { return 0 }
+		return int(uint32(buf[0])<<24 | uint32(buf[1])<<16 | uint32(buf[2])<<8 | uint32(buf[3]))
+	}
+	// enc == 3: encoded string value indicator; return this marker to caller by negative length
+	return -int(b & 0x3F)
+}
+
+// rdbReadString reads a string-encoded value (including encoded-int forms) and returns bytes
+func rdbReadString(r *bufio.Reader) []byte {
+	// Peek first length byte
+	b, err := r.ReadByte()
+	if err != nil { return nil }
+	enc := (b & 0xC0) >> 6
+	if enc == 0 { // 6-bit length
+		l := int(b & 0x3F)
+		buf := make([]byte, l)
+		if _, err := io.ReadFull(r, buf); err != nil { return nil }
+		return buf
+	}
+	if enc == 1 { // 14-bit
+		b2, _ := r.ReadByte()
+		l := int(((int(b) & 0x3F) << 8) | int(b2))
+		buf := make([]byte, l)
+		if _, err := io.ReadFull(r, buf); err != nil { return nil }
+		return buf
+	}
+	if enc == 2 { // 32-bit big-endian length
+		buf4 := make([]byte, 4)
+		if _, err := io.ReadFull(r, buf4); err != nil { return nil }
+		l := int(uint32(buf4[0])<<24 | uint32(buf4[1])<<16 | uint32(buf4[2])<<8 | uint32(buf4[3]))
+		buf := make([]byte, l)
+		if _, err := io.ReadFull(r, buf); err != nil { return nil }
+		return buf
+	}
+	// Encoded value (ints or LZF). We support int8/int16/int32 forms.
+	subtype := b & 0x3F
+	switch subtype {
+	case 0: // 8-bit int
+		v, _ := r.ReadByte()
+		return []byte(strconv.FormatInt(int64(int8(v)), 10))
+	case 1: // 16-bit int, little-endian
+		buf := make([]byte, 2)
+		if _, err := io.ReadFull(r, buf); err != nil { return nil }
+		n := int16(uint16(buf[0]) | uint16(buf[1])<<8)
+		return []byte(strconv.FormatInt(int64(n), 10))
+	case 2: // 32-bit int, little-endian
+		buf := make([]byte, 4)
+		if _, err := io.ReadFull(r, buf); err != nil { return nil }
+		n := int32(uint32(buf[0]) | uint32(buf[1])<<8 | uint32(buf[2])<<16 | uint32(buf[3])<<24)
+		return []byte(strconv.FormatInt(int64(n), 10))
+	default:
+		// LZF or unsupported
+		return nil
+	}
+}
 
 // Helper to encode a RESP array
 func encodeRESPArray(args []string) []byte {
@@ -671,6 +808,24 @@ func handleCommand(args []string) string {
 		// Unused sections -> empty bulk string
 		return "$0\r\n"
 
+	case "keys":
+		// Support only KEYS *
+		if len(args) != 2 || args[1] != "*" {
+			return "-ERR only KEYS * is supported\r\n"
+		}
+		// Collect keys from string storage only (adequate for this stage)
+		storageMutex.RLock()
+		keys := make([]string, 0, len(storage))
+		for k := range storage {
+			keys = append(keys, k)
+		}
+		storageMutex.RUnlock()
+		resp := fmt.Sprintf("*%d\r\n", len(keys))
+		for _, k := range keys {
+			resp += fmt.Sprintf("$%d\r\n%s\r\n", len(k), k)
+		}
+		return resp
+
 	case "config":
 		// Support: CONFIG GET <param>
 		if len(args) >= 3 && strings.ToLower(args[1]) == "get" {
@@ -1168,6 +1323,8 @@ func main() {
 	// Store RDB config (empty is allowed)
 	rdbDir = *dirFlag
 	rdbFilename = *dbfileFlag
+	// Attempt to load existing RDB at startup (missing file is fine)
+	loadRDB(rdbDir, rdbFilename)
 	addr := fmt.Sprintf("0.0.0.0:%d", *port)
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
