@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"net"
@@ -47,6 +48,24 @@ var blpopMutex sync.Mutex
 // Replication metadata (initialized at startup)
 var masterReplID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
 var masterReplOffset int64 = 0
+
+// Empty RDB file (valid, empty DB) as base64; decoded once
+var emptyRDBData []byte
+var emptyRDBOnce sync.Once
+
+func getEmptyRDB() []byte {
+	emptyRDBOnce.Do(func() {
+		// This is a minimal valid empty RDB (from challenge hints)
+		const b64 = "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog=="
+		data, err := base64.StdEncoding.DecodeString(b64)
+		if err == nil {
+			emptyRDBData = data
+		} else {
+			emptyRDBData = []byte{} // fallback, should not happen
+		}
+	})
+	return emptyRDBData
+}
 
 func parseRESPArray(reader *bufio.Reader) ([]string, error) {
 	// Read the number of arguments (starts with *)
@@ -854,6 +873,18 @@ func handleClient(conn net.Conn) {
 		}
 
 		cmd := strings.ToLower(args[0])
+
+		// PSYNC handshake (master side): reply FULLRESYNC and then stream an empty RDB
+		if cmd == "psync" {
+			// Respond with FULLRESYNC <REPL_ID> 0\r\n
+			fmt.Fprintf(conn, "+FULLRESYNC %s %d\r\n", masterReplID, masterReplOffset)
+			// Then send RDB file: $<len>\r\n<binary>
+			rdb := getEmptyRDB()
+			fmt.Fprintf(conn, "$%d\r\n", len(rdb))
+			conn.Write(rdb)
+			// After sending RDB, keep the connection open for future stages
+			continue
+		}
 
 		// Start transaction
 		if cmd == "multi" {
