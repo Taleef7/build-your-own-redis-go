@@ -67,6 +67,69 @@ func getEmptyRDB() []byte {
 	return emptyRDBData
 }
 
+// Track replica connections for command propagation
+var replicaConns []net.Conn
+var replicaConnsMutex sync.Mutex
+
+// Helper to encode a RESP array
+func encodeRESPArray(args []string) []byte {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("*%d\r\n", len(args)))
+	for _, a := range args {
+		b.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(a), a))
+	}
+	return []byte(b.String())
+}
+
+// Determine if a command should be propagated to replicas
+func isWriteCommand(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch strings.ToLower(args[0]) {
+	case "set", "del", "incr", "decr", "lpush", "rpush", "lpop", "xadd":
+		return true
+	default:
+		return false
+	}
+}
+
+// Send a command (as RESP array) to all replica connections
+func propagateToReplicas(args []string) {
+	// Copy current targets under lock
+	replicaConnsMutex.Lock()
+	targets := make([]net.Conn, len(replicaConns))
+	copy(targets, replicaConns)
+	replicaConnsMutex.Unlock()
+
+	payload := encodeRESPArray(args)
+	var dead []net.Conn
+	for _, c := range targets {
+		if _, err := c.Write(payload); err != nil {
+			dead = append(dead, c)
+		}
+	}
+	if len(dead) > 0 {
+		// Prune dead connections
+		replicaConnsMutex.Lock()
+		filtered := replicaConns[:0]
+		for _, c := range replicaConns {
+			remove := false
+			for _, d := range dead {
+				if c == d {
+					remove = true
+					break
+				}
+			}
+			if !remove {
+				filtered = append(filtered, c)
+			}
+		}
+		replicaConns = filtered
+		replicaConnsMutex.Unlock()
+	}
+}
+
 func parseRESPArray(reader *bufio.Reader) ([]string, error) {
 	// Read the number of arguments (starts with *)
 	line, err := reader.ReadString('\n')
@@ -882,6 +945,10 @@ func handleClient(conn net.Conn) {
 			rdb := getEmptyRDB()
 			fmt.Fprintf(conn, "$%d\r\n", len(rdb))
 			conn.Write(rdb)
+			// Register this connection as a replica target for propagation
+			replicaConnsMutex.Lock()
+			replicaConns = append(replicaConns, conn)
+			replicaConnsMutex.Unlock()
 			// After sending RDB, keep the connection open for future stages
 			continue
 		}
@@ -947,11 +1014,17 @@ func handleClient(conn net.Conn) {
 			continue
 		}
 
+
 		// Not in MULTI: handle command immediately
 		response := handleCommand(args)
 
 		// Send the response
 		conn.Write([]byte(response))
+
+		// After successful write commands, propagate to replicas (masters only)
+		if !replicaMode && isWriteCommand(args) {
+			propagateToReplicas(args)
+		}
 	}
 }
 
