@@ -123,13 +123,17 @@ func loadRDB(dir, filename string) {
 			_ = rdbReadLength(rd)
 		case 0xFD: // EXPIRETIME (seconds, little-endian)
 			buf := make([]byte, 4)
-			if _, err := io.ReadFull(rd, buf); err != nil { return }
+			if _, err := io.ReadFull(rd, buf); err != nil {
+				return
+			}
 			sec := int64(uint32(buf[0]) | uint32(buf[1])<<8 | uint32(buf[2])<<16 | uint32(buf[3])<<24)
 			t := time.Unix(sec, 0)
 			pendingExpiry = &t
 		case 0xFC: // EXPIRETIME_MS (milliseconds, little-endian)
 			buf := make([]byte, 8)
-			if _, err := io.ReadFull(rd, buf); err != nil { return }
+			if _, err := io.ReadFull(rd, buf); err != nil {
+				return
+			}
 			ms := int64(uint64(buf[0]) | uint64(buf[1])<<8 | uint64(buf[2])<<16 | uint64(buf[3])<<24 |
 				uint64(buf[4])<<32 | uint64(buf[5])<<40 | uint64(buf[6])<<48 | uint64(buf[7])<<56)
 			t := time.Unix(0, ms*int64(time.Millisecond))
@@ -840,6 +844,19 @@ func handleCommand(args []string) string {
 		}
 		// Unused sections -> empty bulk string
 		return "$0\r\n"
+
+	case "subscribe":
+		// Minimal support: SUBSCRIBE <channel> once, return confirmation array
+		if len(args) != 2 {
+			return "-ERR wrong number of arguments for SUBSCRIBE command\r\n"
+		}
+		ch := args[1]
+		// ["subscribe", channel, 1]
+		resp := "*3\r\n"
+		resp += "$9\r\nsubscribe\r\n"
+		resp += fmt.Sprintf("$%d\r\n%s\r\n", len(ch), ch)
+		resp += ":1\r\n"
+		return resp
 
 	case "keys":
 		// Support only KEYS *
