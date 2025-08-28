@@ -845,18 +845,7 @@ func handleCommand(args []string) string {
 		// Unused sections -> empty bulk string
 		return "$0\r\n"
 
-	case "subscribe":
-		// Minimal support: SUBSCRIBE <channel> once, return confirmation array
-		if len(args) != 2 {
-			return "-ERR wrong number of arguments for SUBSCRIBE command\r\n"
-		}
-		ch := args[1]
-		// ["subscribe", channel, 1]
-		resp := "*3\r\n"
-		resp += "$9\r\nsubscribe\r\n"
-		resp += fmt.Sprintf("$%d\r\n%s\r\n", len(ch), ch)
-		resp += ":1\r\n"
-		return resp
+	// subscribe handled in handleClient to maintain per-connection state
 
 	case "keys":
 		// Support only KEYS *
@@ -1181,6 +1170,8 @@ func handleClient(conn net.Conn) {
 	var queuedCommands [][]string
 	// Track the last produced replication stream offset for this client's writes
 	var lastWriteOffset int64 = -1
+	// Pub/Sub: per-connection subscribed channels
+	subscribed := make(map[string]bool)
 
 	for {
 		// Parse the RESP array (command and arguments)
@@ -1223,6 +1214,29 @@ func handleClient(conn net.Conn) {
 			replicaAckOffsets[conn] = 0
 			replicaConnsMutex.Unlock()
 			// After sending RDB, keep the connection open for future stages
+			continue
+		}
+
+		// Handle SUBSCRIBE here to keep per-connection state
+		if cmd == "subscribe" {
+			if len(args) < 2 {
+				conn.Write([]byte("-ERR wrong number of arguments for SUBSCRIBE command\r\n"))
+				continue
+			}
+			for i := 1; i < len(args); i++ {
+				ch := args[i]
+				if !subscribed[ch] {
+					subscribed[ch] = true
+				}
+				count := len(subscribed)
+				// Send one confirmation per channel
+				var b strings.Builder
+				b.WriteString("*3\r\n")
+				b.WriteString("$9\r\nsubscribe\r\n")
+				b.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(ch), ch))
+				b.WriteString(fmt.Sprintf(":%d\r\n", count))
+				conn.Write([]byte(b.String()))
+			}
 			continue
 		}
 
