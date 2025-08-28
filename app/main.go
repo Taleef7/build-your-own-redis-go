@@ -76,6 +76,7 @@ func getEmptyRDB() []byte {
 // Track replica connections for command propagation
 var replicaConns []net.Conn
 var replicaConnsMutex sync.Mutex
+
 // Track last acknowledged offsets from replicas (by connection)
 var replicaAckOffsets = make(map[net.Conn]int64)
 
@@ -105,6 +106,7 @@ func loadRDB(dir, filename string) {
 		return
 	}
 	// Loop through sections
+	var pendingExpiry *time.Time
 	for {
 		b, err := rd.ReadByte()
 		if err != nil {
@@ -119,12 +121,19 @@ func loadRDB(dir, filename string) {
 		case 0xFB: // RESIZEDB
 			_ = rdbReadLength(rd)
 			_ = rdbReadLength(rd)
-		case 0xFD: // EXPIRETIME (seconds)
-			// skip 4 bytes
-			if _, err := io.CopyN(io.Discard, rd, 4); err != nil { return }
-			// next should be a type byte; continue loop to read it
-		case 0xFC: // EXPIRETIME_MS (milliseconds)
-			if _, err := io.CopyN(io.Discard, rd, 8); err != nil { return }
+		case 0xFD: // EXPIRETIME (seconds, little-endian)
+			buf := make([]byte, 4)
+			if _, err := io.ReadFull(rd, buf); err != nil { return }
+			sec := int64(uint32(buf[0]) | uint32(buf[1])<<8 | uint32(buf[2])<<16 | uint32(buf[3])<<24)
+			t := time.Unix(sec, 0)
+			pendingExpiry = &t
+		case 0xFC: // EXPIRETIME_MS (milliseconds, little-endian)
+			buf := make([]byte, 8)
+			if _, err := io.ReadFull(rd, buf); err != nil { return }
+			ms := int64(uint64(buf[0]) | uint64(buf[1])<<8 | uint64(buf[2])<<16 | uint64(buf[3])<<24 |
+				uint64(buf[4])<<32 | uint64(buf[5])<<40 | uint64(buf[6])<<48 | uint64(buf[7])<<56)
+			t := time.Unix(0, ms*int64(time.Millisecond))
+			pendingExpiry = &t
 		case 0xFF: // EOF
 			// read checksum (8 bytes) if present
 			_, _ = io.CopyN(io.Discard, rd, 8)
@@ -135,9 +144,15 @@ func loadRDB(dir, filename string) {
 				key := rdbReadString(rd)
 				val := rdbReadString(rd)
 				if key != nil && val != nil {
+					var expCopy *time.Time
+					if pendingExpiry != nil {
+						te := *pendingExpiry
+						expCopy = &te
+					}
 					storageMutex.Lock()
-					storage[string(key)] = StorageEntry{value: string(val), expiry: nil}
+					storage[string(key)] = StorageEntry{value: string(val), expiry: expCopy}
 					storageMutex.Unlock()
+					pendingExpiry = nil
 				}
 			} else {
 				// Unsupported type: skip conservatively by abandoning parse
@@ -150,7 +165,9 @@ func loadRDB(dir, filename string) {
 // rdbReadLength parses the RDB length-encoding and returns the length as int
 func rdbReadLength(r *bufio.Reader) int {
 	b, err := r.ReadByte()
-	if err != nil { return 0 }
+	if err != nil {
+		return 0
+	}
 	enc := (b & 0xC0) >> 6
 	if enc == 0 { // 6-bit
 		return int(b & 0x3F)
@@ -161,7 +178,9 @@ func rdbReadLength(r *bufio.Reader) int {
 	}
 	if enc == 2 { // 32-bit big-endian
 		buf := make([]byte, 4)
-		if _, err := io.ReadFull(r, buf); err != nil { return 0 }
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return 0
+		}
 		return int(uint32(buf[0])<<24 | uint32(buf[1])<<16 | uint32(buf[2])<<8 | uint32(buf[3]))
 	}
 	// enc == 3: encoded string value indicator; return this marker to caller by negative length
@@ -172,27 +191,37 @@ func rdbReadLength(r *bufio.Reader) int {
 func rdbReadString(r *bufio.Reader) []byte {
 	// Peek first length byte
 	b, err := r.ReadByte()
-	if err != nil { return nil }
+	if err != nil {
+		return nil
+	}
 	enc := (b & 0xC0) >> 6
 	if enc == 0 { // 6-bit length
 		l := int(b & 0x3F)
 		buf := make([]byte, l)
-		if _, err := io.ReadFull(r, buf); err != nil { return nil }
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return nil
+		}
 		return buf
 	}
 	if enc == 1 { // 14-bit
 		b2, _ := r.ReadByte()
 		l := int(((int(b) & 0x3F) << 8) | int(b2))
 		buf := make([]byte, l)
-		if _, err := io.ReadFull(r, buf); err != nil { return nil }
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return nil
+		}
 		return buf
 	}
 	if enc == 2 { // 32-bit big-endian length
 		buf4 := make([]byte, 4)
-		if _, err := io.ReadFull(r, buf4); err != nil { return nil }
+		if _, err := io.ReadFull(r, buf4); err != nil {
+			return nil
+		}
 		l := int(uint32(buf4[0])<<24 | uint32(buf4[1])<<16 | uint32(buf4[2])<<8 | uint32(buf4[3]))
 		buf := make([]byte, l)
-		if _, err := io.ReadFull(r, buf); err != nil { return nil }
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return nil
+		}
 		return buf
 	}
 	// Encoded value (ints or LZF). We support int8/int16/int32 forms.
@@ -203,12 +232,16 @@ func rdbReadString(r *bufio.Reader) []byte {
 		return []byte(strconv.FormatInt(int64(int8(v)), 10))
 	case 1: // 16-bit int, little-endian
 		buf := make([]byte, 2)
-		if _, err := io.ReadFull(r, buf); err != nil { return nil }
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return nil
+		}
 		n := int16(uint16(buf[0]) | uint16(buf[1])<<8)
 		return []byte(strconv.FormatInt(int64(n), 10))
 	case 2: // 32-bit int, little-endian
 		buf := make([]byte, 4)
-		if _, err := io.ReadFull(r, buf); err != nil { return nil }
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return nil
+		}
 		n := int32(uint32(buf[0]) | uint32(buf[1])<<8 | uint32(buf[2])<<16 | uint32(buf[3])<<24)
 		return []byte(strconv.FormatInt(int64(n), 10))
 	default:
@@ -298,7 +331,7 @@ func parseRESPArray(reader *bufio.Reader) ([]string, error) {
 	// Read the number of arguments (starts with *)
 	line, err := reader.ReadString('\n')
 	if err != nil {
-	return nil, err
+		return nil, err
 	}
 
 	// Check if it's a RESP array (starts with *)
