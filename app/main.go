@@ -1217,6 +1217,23 @@ func handleClient(conn net.Conn) {
 			continue
 		}
 
+		// Subscribed-mode gate: if this client has any subscriptions, only allow a subset
+		if len(subscribed) > 0 {
+			allowed := map[string]bool{
+				"subscribe":    true,
+				"unsubscribe":  true,
+				"psubscribe":   true,
+				"punsubscribe": true,
+				"ping":         true,
+				"quit":         true,
+				"reset":        true,
+			}
+			if !allowed[cmd] {
+				conn.Write([]byte(fmt.Sprintf("-ERR Can't execute '%s': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context\r\n", cmd)))
+				continue
+			}
+		}
+
 		// Handle SUBSCRIBE here to keep per-connection state
 		if cmd == "subscribe" {
 			if len(args) < 2 {
