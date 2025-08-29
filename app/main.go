@@ -862,6 +862,19 @@ func handleCommand(args []string) string {
 		}
 		storageMutex.RUnlock()
 		return resp
+	case "zcard":
+		if len(args) != 2 {
+			return "-ERR wrong number of arguments for ZCARD command\r\n"
+		}
+		key := args[1]
+		storageMutex.RLock()
+		zs := zsetStorage[key]
+		n := 0
+		if zs != nil {
+			n = len(zs.sorted)
+		}
+		storageMutex.RUnlock()
+		return fmt.Sprintf(":%d\r\n", n)
 	case "xadd":
 		if len(args) < 5 || (len(args)-3)%2 != 0 {
 			return "-ERR wrong number of arguments for XADD command\r\n"
