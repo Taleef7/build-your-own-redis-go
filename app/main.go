@@ -1297,20 +1297,33 @@ func handleClient(conn net.Conn) {
 			continue
 		}
 
-		// PUBLISH command: respond with number of subscribers for the channel
+		// PUBLISH command: deliver message to all subscribers and respond with count
 		if cmd == "publish" {
 			if len(args) < 3 {
 				conn.Write([]byte("-ERR wrong number of arguments for PUBLISH command\r\n"))
 				continue
 			}
 			channel := args[1]
-			// message := args[2]  // not used in this stage
+			message := args[2]
+			// Snapshot subscribers to avoid holding the lock during writes
+			var targets []net.Conn
 			pubsubMutex.Lock()
-			count := 0
 			if set, ok := pubsubSubscribers[channel]; ok {
-				count = len(set)
+				targets = make([]net.Conn, 0, len(set))
+				for c := range set {
+					targets = append(targets, c)
+				}
 			}
 			pubsubMutex.Unlock()
+			// Deliver message to each subscriber
+			if len(targets) > 0 {
+				payload := encodeRESPArray([]string{"message", channel, message})
+				for _, c := range targets {
+					// Best-effort delivery; ignore errors here
+					_, _ = c.Write(payload)
+				}
+			}
+			count := len(targets)
 			conn.Write([]byte(fmt.Sprintf(":%d\r\n", count)))
 			continue
 		}
