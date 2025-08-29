@@ -1297,6 +1297,54 @@ func handleClient(conn net.Conn) {
 			continue
 		}
 
+		// Handle UNSUBSCRIBE (one or more channels). If no channels provided, unsubscribe from all.
+		if cmd == "unsubscribe" {
+			// Build list of channels to unsubscribe
+			var chans []string
+			if len(args) >= 2 {
+				chans = args[1:]
+			} else {
+				// Unsubscribe all current subscriptions
+				for ch := range subscribed {
+					chans = append(chans, ch)
+				}
+				// If none, still send a single reply indicating 0 remaining
+				if len(chans) == 0 {
+					var b strings.Builder
+					b.WriteString("*3\r\n")
+					b.WriteString("$11\r\nunsubscribe\r\n")
+					b.WriteString("$0\r\n\r\n")
+					b.WriteString(":0\r\n")
+					conn.Write([]byte(b.String()))
+					continue
+				}
+			}
+
+			for _, ch := range chans {
+				// Only delete if subscribed
+				if subscribed[ch] {
+					delete(subscribed, ch)
+					// Remove from global registry
+					pubsubMutex.Lock()
+					if set, ok := pubsubSubscribers[ch]; ok {
+						delete(set, conn)
+						if len(set) == 0 {
+							delete(pubsubSubscribers, ch)
+						}
+					}
+					pubsubMutex.Unlock()
+				}
+				count := len(subscribed)
+				var b strings.Builder
+				b.WriteString("*3\r\n")
+				b.WriteString("$11\r\nunsubscribe\r\n")
+				b.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(ch), ch))
+				b.WriteString(fmt.Sprintf(":%d\r\n", count))
+				conn.Write([]byte(b.String()))
+			}
+			continue
+		}
+
 		// PUBLISH command: deliver message to all subscribers and respond with count
 		if cmd == "publish" {
 			if len(args) < 3 {
