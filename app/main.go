@@ -1564,6 +1564,40 @@ func handleCommand(args []string) string {
 		storageMutex.Unlock()
 		return fmt.Sprintf(":%d\r\n", added)
 
+	case "geopos":
+		// Syntax: GEOPOS key member [member ...]
+		if len(args) < 3 {
+			return "-ERR wrong number of arguments for GEOPOS command\r\n"
+		}
+		key := args[1]
+		members := args[2:]
+		storageMutex.RLock()
+		zs := zsetStorage[key]
+		storageMutex.RUnlock()
+		// Build RESP array with one entry per requested member
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf("*%d\r\n", len(members)))
+		if zs == nil {
+			for range members {
+				b.WriteString("*-1\r\n")
+			}
+			return b.String()
+		}
+		for _, m := range members {
+			storageMutex.RLock()
+			_, ok := zs.dict[m]
+			storageMutex.RUnlock()
+			if !ok {
+				b.WriteString("*-1\r\n")
+				continue
+			}
+			// For this stage return fixed coordinates "0" and "0"
+			b.WriteString("*2\r\n")
+			b.WriteString("$1\r\n0\r\n")
+			b.WriteString("$1\r\n0\r\n")
+		}
+		return b.String()
+
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
 		// INFO command: support `INFO replication` returning role

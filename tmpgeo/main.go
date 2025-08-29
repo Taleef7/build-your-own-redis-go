@@ -6,10 +6,10 @@ import (
 )
 
 const (
-	lonMin = -180.0
-	lonMax = 180.0
-	latMin = -85.05112878
-	latMax = 85.05112878
+	lonMin  = -180.0
+	lonMax  = 180.0
+	latMin  = -85.05112878
+	latMax  = 85.05112878
 	geoStep = 26
 )
 
