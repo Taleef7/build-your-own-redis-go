@@ -349,10 +349,10 @@ func compactInt64ToInt32(v uint64) uint32 {
 // geoDecodeScore decodes the 52-bit interleaved score into (lon, lat) approximations.
 func geoDecodeScore(score uint64) (float64, float64) {
 	// Separate out longitude and latitude interleaved bits
-	x := score      // latitude bits are in even positions
-	y := score >> 1 // longitude bits were shifted left by 1 during encoding
-	latIdx := compactInt64ToInt32(x)
-	lonIdx := compactInt64ToInt32(y)
+	x := score      // bits in even positions
+	y := score >> 1 // bits in odd positions shifted down
+	lonIdx := compactInt64ToInt32(x) // use even bits for longitude
+	latIdx := compactInt64ToInt32(y) // use odd bits for latitude
 	// Convert grid indices back to coordinate cell centers
 	latMin := -85.05112878
 	latMax := 85.05112878
