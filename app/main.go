@@ -812,14 +812,14 @@ func handleCommand(args []string) string {
 		}
 		return fmt.Sprintf(":%d\r\n", rank)
 	case "zrange":
-		// Syntax: ZRANGE key start stop (non-negative indexes only for this stage)
+		// Syntax: ZRANGE key start stop (support negative indexes)
 		if len(args) != 4 {
 			return "-ERR wrong number of arguments for ZRANGE command\r\n"
 		}
 		key := args[1]
-		start, err1 := strconv.Atoi(args[2])
-		stop, err2 := strconv.Atoi(args[3])
-		if err1 != nil || err2 != nil || start < 0 || stop < 0 {
+		startRaw, err1 := strconv.Atoi(args[2])
+		stopRaw, err2 := strconv.Atoi(args[3])
+		if err1 != nil || err2 != nil {
 			return "-ERR invalid range\r\n"
 		}
 		storageMutex.RLock()
@@ -829,6 +829,21 @@ func handleCommand(args []string) string {
 			return "*0\r\n"
 		}
 		n := len(zs.sorted)
+		// Map negative indexes relative to length, clamp below 0 to 0
+		start := startRaw
+		if start < 0 {
+			start = n + start
+			if start < 0 {
+				start = 0
+			}
+		}
+		stop := stopRaw
+		if stop < 0 {
+			stop = n + stop
+			if stop < 0 {
+				stop = 0
+			}
+		}
 		if start >= n {
 			storageMutex.RUnlock()
 			return "*0\r\n"
