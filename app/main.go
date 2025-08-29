@@ -875,6 +875,27 @@ func handleCommand(args []string) string {
 		}
 		storageMutex.RUnlock()
 		return fmt.Sprintf(":%d\r\n", n)
+	case "zscore":
+		// Syntax: ZSCORE key member
+		if len(args) != 3 {
+			return "-ERR wrong number of arguments for ZSCORE command\r\n"
+		}
+		key := args[1]
+		member := args[2]
+		storageMutex.RLock()
+		zs := zsetStorage[key]
+		if zs == nil {
+			storageMutex.RUnlock()
+			return "$-1\r\n"
+		}
+		score, ok := zs.dict[member]
+		storageMutex.RUnlock()
+		if !ok {
+			return "$-1\r\n"
+		}
+		// Format score similarly to Redis (minimal digits, no unnecessary trailing zeros)
+		str := strconv.FormatFloat(score, 'f', -1, 64)
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(str), str)
 	case "xadd":
 		if len(args) < 5 || (len(args)-3)%2 != 0 {
 			return "-ERR wrong number of arguments for XADD command\r\n"
