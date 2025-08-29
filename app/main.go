@@ -781,6 +781,36 @@ func handleCommand(args []string) string {
 			}
 		}
 		return fmt.Sprintf(":%d\r\n", added)
+	case "zrank":
+		// Syntax: ZRANK key member
+		if len(args) != 3 {
+			return "-ERR wrong number of arguments for ZRANK command\r\n"
+		}
+		key := args[1]
+		member := args[2]
+		storageMutex.RLock()
+		zs := zsetStorage[key]
+		if zs == nil {
+			storageMutex.RUnlock()
+			return "$-1\r\n"
+		}
+		if _, ok := zs.dict[member]; !ok {
+			storageMutex.RUnlock()
+			return "$-1\r\n"
+		}
+		// Find index in sorted order
+		rank := -1
+		for i, zm := range zs.sorted {
+			if zm.member == member {
+				rank = i
+				break
+			}
+		}
+		storageMutex.RUnlock()
+		if rank < 0 {
+			return "$-1\r\n"
+		}
+		return fmt.Sprintf(":%d\r\n", rank)
 	case "xadd":
 		if len(args) < 5 || (len(args)-3)%2 != 0 {
 			return "-ERR wrong number of arguments for XADD command\r\n"
