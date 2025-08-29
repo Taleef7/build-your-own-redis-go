@@ -518,7 +518,7 @@ func handleCommand(args []string) string {
 				}
 			}
 			blpopMutex.Unlock()
-			return "$-1\r\n"
+			return "*-1\r\n"
 		}
 	case "rpush":
 		if len(args) < 3 {
