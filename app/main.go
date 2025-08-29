@@ -1108,7 +1108,8 @@ func handleCommand(args []string) string {
 			timer.Stop()
 			return r
 		case <-timer.C:
-			return "$-1\r\n"
+			// On timeout, Redis returns a Null Array for XREAD
+			return "*-1\r\n"
 		}
 
 	case "incr":
