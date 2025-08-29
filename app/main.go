@@ -339,10 +339,10 @@ func compactInt64ToInt32(v uint64) uint32 {
 // geoDecodeScore decodes the 52-bit interleaved score into (lon, lat) approximations.
 func geoDecodeScore(score uint64) (float64, float64) {
 	// Separate out longitude and latitude interleaved bits
-	x := score      // latitude bits in even positions
-	y := score >> 1 // longitude bits were shifted left during encoding
-	latIdx := compactInt64ToInt32(x)
-	lonIdx := compactInt64ToInt32(y)
+	x := score      // even positions
+	y := score >> 1 // odd positions shifted down
+	lonIdx := compactInt64ToInt32(x) // even -> longitude
+	latIdx := compactInt64ToInt32(y) // odd -> latitude
 	// Convert grid indices back to coordinate cell centers
 	latMin := -85.05112878
 	latMax := 85.05112878
@@ -351,8 +351,12 @@ func geoDecodeScore(score uint64) (float64, float64) {
 	latRange := latMax - latMin
 	lonRange := lonMax - lonMin
 	denom := float64(uint64(1) << geoStep)
-	lat := latMin + latRange*((float64(latIdx)+0.5)/denom)
-	lon := lonMin + lonRange*((float64(lonIdx)+0.5)/denom)
+	gridLatMin := latMin + latRange*(float64(latIdx)/denom)
+	gridLatMax := latMin + latRange*(float64(latIdx+1)/denom)
+	gridLonMin := lonMin + lonRange*(float64(lonIdx)/denom)
+	gridLonMax := lonMin + lonRange*(float64(lonIdx+1)/denom)
+	lat := (gridLatMin + gridLatMax) / 2
+	lon := (gridLonMin + gridLonMax) / 2
 	return lon, lat
 }
 
