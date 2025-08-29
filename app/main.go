@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -327,8 +326,9 @@ func geoHashScore(lon, lat float64) uint64 {
 	}
 	
 	// Normalize to the range [0, 2^26)
-	normalizedLatitude := math.Pow(2, 26) * (lat - minLatitude) / latitudeRange
-	normalizedLongitude := math.Pow(2, 26) * (lon - minLongitude) / longitudeRange
+	scale := float64(uint64(1) << 26) // 2^26 as exact integer
+	normalizedLatitude := scale * (lat - minLatitude) / latitudeRange
+	normalizedLongitude := scale * (lon - minLongitude) / longitudeRange
 	
 	// Truncate to integers
 	latInt := uint32(normalizedLatitude)
@@ -360,10 +360,11 @@ func geoDecodeScore(score uint64) (float64, float64) {
 	gridLongitudeNumber := compactInt64ToInt32(y)
 	
 	// Calculate the grid boundaries
-	gridLatitudeMin := minLatitude + latitudeRange*(float64(gridLatitudeNumber)/math.Pow(2, 26))
-	gridLatitudeMax := minLatitude + latitudeRange*(float64(gridLatitudeNumber+1)/math.Pow(2, 26))
-	gridLongitudeMin := minLongitude + longitudeRange*(float64(gridLongitudeNumber)/math.Pow(2, 26))
-	gridLongitudeMax := minLongitude + longitudeRange*(float64(gridLongitudeNumber+1)/math.Pow(2, 26))
+	scale := float64(uint64(1) << 26) // 2^26 as exact integer
+	gridLatitudeMin := minLatitude + latitudeRange*(float64(gridLatitudeNumber)/scale)
+	gridLatitudeMax := minLatitude + latitudeRange*(float64(gridLatitudeNumber+1)/scale)
+	gridLongitudeMin := minLongitude + longitudeRange*(float64(gridLongitudeNumber)/scale)
+	gridLongitudeMax := minLongitude + longitudeRange*(float64(gridLongitudeNumber+1)/scale)
 	
 	// Calculate the center point of the grid cell
 	latitude := (gridLatitudeMin + gridLatitudeMax) / 2
