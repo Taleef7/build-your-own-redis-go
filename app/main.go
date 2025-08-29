@@ -335,6 +335,41 @@ func geoHashScore(lon, lat float64) uint64 {
 	return inter
 }
 
+// compactInt64ToInt32 reverses the spreading used in interleave, keeping bits from even positions.
+func compactInt64ToInt32(v uint64) uint32 {
+	v = v & 0x5555555555555555
+	v = (v | (v >> 1)) & 0x3333333333333333
+	v = (v | (v >> 2)) & 0x0F0F0F0F0F0F0F0F
+	v = (v | (v >> 4)) & 0x00FF00FF00FF00FF
+	v = (v | (v >> 8)) & 0x0000FFFF0000FFFF
+	v = (v | (v >> 16)) & 0x00000000FFFFFFFF
+	return uint32(v)
+}
+
+// geoDecodeScore decodes the 52-bit interleaved score into (lon, lat) approximations.
+func geoDecodeScore(score uint64) (float64, float64) {
+	// Separate out longitude and latitude interleaved bits
+	x := score      // latitude bits are in even positions
+	y := score >> 1 // longitude bits were shifted left by 1 during encoding
+	latIdx := compactInt64ToInt32(x)
+	lonIdx := compactInt64ToInt32(y)
+	// Convert grid indices back to coordinate cell centers
+	latMin := -85.05112878
+	latMax := 85.05112878
+	lonMin := -180.0
+	lonMax := 180.0
+	latRange := latMax - latMin
+	lonRange := lonMax - lonMin
+	denom := float64(uint64(1) << geoStep)
+	gridLatMin := latMin + latRange*(float64(latIdx)/denom)
+	gridLatMax := latMin + latRange*(float64(latIdx+1)/denom)
+	gridLonMin := lonMin + lonRange*(float64(lonIdx)/denom)
+	gridLonMax := lonMin + lonRange*(float64(lonIdx+1)/denom)
+	lat := (gridLatMin + gridLatMax) / 2
+	lon := (gridLonMin + gridLonMax) / 2
+	return lon, lat
+}
+
 // Determine if a command should be propagated to replicas
 func isWriteCommand(args []string) bool {
 	if len(args) == 0 {
@@ -1585,16 +1620,19 @@ func handleCommand(args []string) string {
 		}
 		for _, m := range members {
 			storageMutex.RLock()
-			_, ok := zs.dict[m]
+			sc, ok := zs.dict[m]
 			storageMutex.RUnlock()
 			if !ok {
 				b.WriteString("*-1\r\n")
 				continue
 			}
-			// For this stage return fixed coordinates "0" and "0"
+			// Decode score back to lon/lat
+			lon, lat := geoDecodeScore(uint64(sc))
+			lonStr := strconv.FormatFloat(lon, 'f', -1, 64)
+			latStr := strconv.FormatFloat(lat, 'f', -1, 64)
 			b.WriteString("*2\r\n")
-			b.WriteString("$1\r\n0\r\n")
-			b.WriteString("$1\r\n0\r\n")
+			b.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(lonStr), lonStr))
+			b.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(latStr), latStr))
 		}
 		return b.String()
 
