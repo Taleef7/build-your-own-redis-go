@@ -59,8 +59,8 @@ type ZMember struct {
 
 // Keep both: a map for quick member lookup and a sorted slice by (score, member)
 type ZSet struct {
-	dict   map[string]float64   // member -> score
-	sorted []ZMember            // maintained sorted ascending by score, then member
+	dict   map[string]float64 // member -> score
+	sorted []ZMember          // maintained sorted ascending by score, then member
 }
 
 var zsetStorage = make(map[string]*ZSet)
