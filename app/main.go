@@ -288,7 +288,7 @@ func isWriteCommand(args []string) bool {
 		return false
 	}
 	switch strings.ToLower(args[0]) {
-	case "set", "del", "incr", "decr", "lpush", "rpush", "lpop", "xadd", "zadd":
+	case "set", "del", "incr", "decr", "lpush", "rpush", "lpop", "xadd", "zadd", "zrem":
 		return true
 	default:
 		return false
@@ -896,6 +896,39 @@ func handleCommand(args []string) string {
 		// Format score similarly to Redis (minimal digits, no unnecessary trailing zeros)
 		str := strconv.FormatFloat(score, 'f', -1, 64)
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(str), str)
+	case "zrem":
+		// Syntax: ZREM key member
+		if len(args) != 3 {
+			return "-ERR wrong number of arguments for ZREM command\r\n"
+		}
+		key := args[1]
+		member := args[2]
+		storageMutex.Lock()
+		zs := zsetStorage[key]
+		if zs == nil {
+			storageMutex.Unlock()
+			return ":0\r\n"
+		}
+		if _, ok := zs.dict[member]; !ok {
+			storageMutex.Unlock()
+			return ":0\r\n"
+		}
+		// Remove from dict
+		delete(zs.dict, member)
+		// Remove from sorted slice
+		for i, zm := range zs.sorted {
+			if zm.member == member {
+				zs.sorted = append(zs.sorted[:i], zs.sorted[i+1:]...)
+				break
+			}
+		}
+		// If set becomes empty, optionally keep empty structure (Redis keeps the key until explicit deletion?),
+		// but for simplicity, remove the empty zset map to mirror typical behavior of removing last member.
+		if len(zs.sorted) == 0 {
+			delete(zsetStorage, key)
+		}
+		storageMutex.Unlock()
+		return ":1\r\n"
 	case "xadd":
 		if len(args) < 5 || (len(args)-3)%2 != 0 {
 			return "-ERR wrong number of arguments for XADD command\r\n"
