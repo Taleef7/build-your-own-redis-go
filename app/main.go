@@ -51,6 +51,20 @@ var blpopMutex sync.Mutex
 var pubsubSubscribers = make(map[string]map[net.Conn]bool)
 var pubsubMutex sync.Mutex
 
+// Sorted sets
+type ZMember struct {
+	member string
+	score  float64
+}
+
+// Keep both: a map for quick member lookup and a sorted slice by (score, member)
+type ZSet struct {
+	dict   map[string]float64   // member -> score
+	sorted []ZMember            // maintained sorted ascending by score, then member
+}
+
+var zsetStorage = make(map[string]*ZSet)
+
 // Replication metadata (initialized at startup)
 var masterReplID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
 var masterReplOffset int64 = 0
@@ -274,7 +288,7 @@ func isWriteCommand(args []string) bool {
 		return false
 	}
 	switch strings.ToLower(args[0]) {
-	case "set", "del", "incr", "decr", "lpush", "rpush", "lpop", "xadd":
+	case "set", "del", "incr", "decr", "lpush", "rpush", "lpop", "xadd", "zadd":
 		return true
 	default:
 		return false
@@ -684,6 +698,89 @@ func handleCommand(args []string) string {
 			resp += fmt.Sprintf("$%d\r\n%s\r\n", len(elem), elem)
 		}
 		return resp
+	case "zadd":
+		// Stage ct1: create a new sorted set with a single member
+		// Syntax: ZADD key score member
+		if len(args) != 4 {
+			return "-ERR wrong number of arguments for ZADD command\r\n"
+		}
+		key := args[1]
+		scoreStr := args[2]
+		member := args[3]
+		score, err := strconv.ParseFloat(scoreStr, 64)
+		if err != nil {
+			return "-ERR value is not a valid float\r\n"
+		}
+		storageMutex.Lock()
+		defer storageMutex.Unlock()
+		// Only handle creating a new set with one member for this stage
+		zs := zsetStorage[key]
+		if zs == nil {
+			zs = &ZSet{dict: make(map[string]float64)}
+			zsetStorage[key] = zs
+		}
+		// Count only if member is new
+		added := 0
+		if _, exists := zs.dict[member]; !exists {
+			added = 1
+			zs.dict[member] = score
+			// insert maintaining order (linear insert for now, n is tiny for this stage)
+			inserted := false
+			for i, zm := range zs.sorted {
+				if score < zm.score || (score == zm.score && member < zm.member) {
+					zs.sorted = append(zs.sorted[:i], append([]ZMember{{member: member, score: score}}, zs.sorted[i:]...)...)
+					inserted = true
+					break
+				}
+			}
+			if !inserted {
+				zs.sorted = append(zs.sorted, ZMember{member: member, score: score})
+			}
+		} else {
+			// For this stage, if member exists, we still return 0 and leave ordering/score as-is or update score without counting
+			if _, exists := zs.dict[member]; !exists {
+				added = 1
+				zs.dict[member] = score
+				// simple append; order maintenance minimal for stage scope
+				inserted := false
+				for i, zm := range zs.sorted {
+					if score < zm.score || (score == zm.score && member < zm.member) {
+						zs.sorted = append(zs.sorted[:i], append([]ZMember{{member: member, score: score}}, zs.sorted[i:]...)...)
+						inserted = true
+						break
+					}
+				}
+				if !inserted {
+					zs.sorted = append(zs.sorted, ZMember{member: member, score: score})
+				}
+			} else {
+				// Update score but don't count as added (future stages may refine logic)
+				old := zs.dict[member]
+				if old != score {
+					zs.dict[member] = score
+					// Rebuild sorted slice minimally
+					for i, zm := range zs.sorted {
+						if zm.member == member {
+							zs.sorted = append(zs.sorted[:i], zs.sorted[i+1:]...)
+							break
+						}
+					}
+					// re-insert
+					inserted := false
+					for i, zm := range zs.sorted {
+						if score < zm.score || (score == zm.score && member < zm.member) {
+							zs.sorted = append(zs.sorted[:i], append([]ZMember{{member: member, score: score}}, zs.sorted[i:]...)...)
+							inserted = true
+							break
+						}
+					}
+					if !inserted {
+						zs.sorted = append(zs.sorted, ZMember{member: member, score: score})
+					}
+				}
+			}
+		}
+		return fmt.Sprintf(":%d\r\n", added)
 	case "xadd":
 		if len(args) < 5 || (len(args)-3)%2 != 0 {
 			return "-ERR wrong number of arguments for XADD command\r\n"
@@ -826,12 +923,16 @@ func handleCommand(args []string) string {
 		storageMutex.RLock()
 		_, exists := storage[key]
 		_, streamExists := streamStorage[key]
+		_, zsetExists := zsetStorage[key]
 		storageMutex.RUnlock()
 		if exists {
 			return "+string\r\n"
 		}
 		if streamExists {
 			return "+stream\r\n"
+		}
+		if zsetExists {
+			return "+zset\r\n"
 		}
 		return "+none\r\n"
 
