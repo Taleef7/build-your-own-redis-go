@@ -1409,8 +1409,49 @@ func handleCommand(args []string) string {
 		return fmt.Sprintf(":%d\r\n", cnt)
 
 	case "geoadd":
-		// Stage zt4: For now, simply acknowledge with integer 1 regardless of args
-		return ":1\r\n"
+		// Validate coordinates and return count; storage will be implemented in later stages
+		if len(args) < 5 {
+			return "-ERR wrong number of arguments for GEOADD command\r\n"
+		}
+		// Skip supported options: NX, XX, CH (case-insensitive)
+		i := 2
+		for i < len(args) {
+			op := strings.ToLower(args[i])
+			if op == "nx" || op == "xx" || op == "ch" {
+				i++
+				continue
+			}
+			break
+		}
+		if i+2 >= len(args) || ((len(args)-i)%3) != 0 {
+			return "-ERR wrong number of arguments for GEOADD command\r\n"
+		}
+		for j := i; j < len(args); j += 3 {
+			lonStr := args[j]
+			latStr := args[j+1]
+			// member := args[j+2] // not used in this stage
+			lon, err1 := strconv.ParseFloat(lonStr, 64)
+			if err1 != nil {
+				return "-ERR invalid longitude value\r\n"
+			}
+			lat, err2 := strconv.ParseFloat(latStr, 64)
+			if err2 != nil {
+				return "-ERR invalid latitude value\r\n"
+			}
+			invalidLon := lon < -180.0 || lon > 180.0
+			invalidLat := lat < -85.05112878 || lat > 85.05112878
+			if invalidLon && invalidLat {
+				return "-ERR invalid longitude and latitude\r\n"
+			}
+			if invalidLon {
+				return "-ERR invalid longitude value\r\n"
+			}
+			if invalidLat {
+				return "-ERR invalid latitude value\r\n"
+			}
+		}
+		count := (len(args) - i) / 3
+		return fmt.Sprintf(":%d\r\n", count)
 
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
