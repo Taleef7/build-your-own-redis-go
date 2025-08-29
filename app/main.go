@@ -288,7 +288,7 @@ func isWriteCommand(args []string) bool {
 		return false
 	}
 	switch strings.ToLower(args[0]) {
-	case "set", "del", "incr", "decr", "lpush", "rpush", "lpop", "xadd", "zadd", "zrem":
+	case "set", "del", "incr", "decr", "lpush", "rpush", "lpop", "xadd", "zadd", "zrem", "geoadd":
 		return true
 	default:
 		return false
@@ -1407,6 +1407,10 @@ func handleCommand(args []string) string {
 		cnt := len(replicaConns)
 		replicaConnsMutex.Unlock()
 		return fmt.Sprintf(":%d\r\n", cnt)
+
+	case "geoadd":
+		// Stage zt4: For now, simply acknowledge with integer 1 regardless of args
+		return ":1\r\n"
 
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
