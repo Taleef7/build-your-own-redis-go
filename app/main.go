@@ -359,10 +359,20 @@ func geoDecodeScore(score uint64) (float64, float64) {
 	gridLatitudeNumber := compactInt64ToInt32(x)
 	gridLongitudeNumber := compactInt64ToInt32(y)
 	
-	// Calculate the center point of the grid cell directly
-	scale := float64(uint64(1) << 26) // 2^26 as exact integer
-	latitude := minLatitude + latitudeRange*(float64(gridLatitudeNumber)+0.5)/scale
-	longitude := minLongitude + longitudeRange*(float64(gridLongitudeNumber)+0.5)/scale
+	// Calculate boundaries exactly as Redis does
+	step := float64(uint64(1) << 26) // 2^26 as exact integer
+	
+	// latitude boundaries
+	latMin := minLatitude + (float64(gridLatitudeNumber)/step)*latitudeRange
+	latMax := minLatitude + (float64(gridLatitudeNumber+1)/step)*latitudeRange
+	
+	// longitude boundaries  
+	lonMin := minLongitude + (float64(gridLongitudeNumber)/step)*longitudeRange
+	lonMax := minLongitude + (float64(gridLongitudeNumber+1)/step)*longitudeRange
+	
+	// Calculate center point
+	latitude := (latMin + latMax) / 2.0
+	longitude := (lonMin + lonMax) / 2.0
 	
 	return longitude, latitude
 }// Determine if a command should be propagated to replicas
