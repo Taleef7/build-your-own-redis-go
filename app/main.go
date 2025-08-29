@@ -1450,8 +1450,60 @@ func handleCommand(args []string) string {
 				return "-ERR invalid latitude value\r\n"
 			}
 		}
-		count := (len(args) - i) / 3
-		return fmt.Sprintf(":%d\r\n", count)
+		// Store locations in a sorted set with score 0 for now
+		key := args[1]
+		added := 0
+		storageMutex.Lock()
+		zs := zsetStorage[key]
+		if zs == nil {
+			zs = &ZSet{dict: make(map[string]float64)}
+			zsetStorage[key] = zs
+		}
+		for j := i; j < len(args); j += 3 {
+			member := args[j+2]
+			score := 0.0
+			if old, exists := zs.dict[member]; exists {
+				if old != score {
+					zs.dict[member] = score
+					// remove from sorted
+					for idx, zm := range zs.sorted {
+						if zm.member == member {
+							zs.sorted = append(zs.sorted[:idx], zs.sorted[idx+1:]...)
+							break
+						}
+					}
+					// re-insert maintaining order (score asc, then member)
+					inserted := false
+					for idx, zm := range zs.sorted {
+						if score < zm.score || (score == zm.score && member < zm.member) {
+							zs.sorted = append(zs.sorted[:idx], append([]ZMember{{member: member, score: score}}, zs.sorted[idx:]...)...)
+							inserted = true
+							break
+						}
+					}
+					if !inserted {
+						zs.sorted = append(zs.sorted, ZMember{member: member, score: score})
+					}
+				}
+				// if same score, nothing to change
+			} else {
+				added++
+				zs.dict[member] = score
+				inserted := false
+				for idx, zm := range zs.sorted {
+					if score < zm.score || (score == zm.score && member < zm.member) {
+						zs.sorted = append(zs.sorted[:idx], append([]ZMember{{member: member, score: score}}, zs.sorted[idx:]...)...)
+						inserted = true
+						break
+					}
+				}
+				if !inserted {
+					zs.sorted = append(zs.sorted, ZMember{member: member, score: score})
+				}
+			}
+		}
+		storageMutex.Unlock()
+		return fmt.Sprintf(":%d\r\n", added)
 
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'\r\n", args[0])
