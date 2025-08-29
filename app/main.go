@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -283,46 +284,57 @@ func encodeRESPArray(args []string) []byte {
 }
 
 // --- Geospatial helpers (52-bit score: 26 bits lon, 26 bits lat interleaved) ---
-const geoStep = 26
+const (
+	geoStep       = 26
+	minLatitude   = -85.05112878
+	maxLatitude   = 85.05112878
+	minLongitude  = -180.0
+	maxLongitude  = 180.0
+	latitudeRange = maxLatitude - minLatitude
+	longitudeRange = maxLongitude - minLongitude
+)
 
-func encodeCoordBits(val, min, max float64, step int) uint64 {
-	var bits uint64 = 0
-	for i := 0; i < step; i++ {
-		mid := (min + max) / 2
-		bits <<= 1
-		if val >= mid {
-			bits |= 1
-			min = mid
-		} else {
-			max = mid
-		}
-	}
-	return bits
+func spreadInt32ToInt64(v uint32) uint64 {
+	result := uint64(v) & 0xFFFFFFFF
+	result = (result | (result << 16)) & 0x0000FFFF0000FFFF
+	result = (result | (result << 8)) & 0x00FF00FF00FF00FF
+	result = (result | (result << 4)) & 0x0F0F0F0F0F0F0F0F
+	result = (result | (result << 2)) & 0x3333333333333333
+	result = (result | (result << 1)) & 0x5555555555555555
+	return result
+}
+
+func interleave(x, y uint32) uint64 {
+	xSpread := spreadInt32ToInt64(x)
+	ySpread := spreadInt32ToInt64(y)
+	yShifted := ySpread << 1
+	return xSpread | yShifted
 }
 
 // geoHashScore returns the 52-bit interleaved geohash used by Redis GEO commands.
 // Longitude range: [-180, 180], Latitude range: [-85.05112878, 85.05112878].
 func geoHashScore(lon, lat float64) uint64 {
 	// Clamp to supported ranges
-	if lon < -180.0 {
-		lon = -180.0
-	} else if lon > 180.0 {
-		lon = 180.0
+	if lon < minLongitude {
+		lon = minLongitude
+	} else if lon > maxLongitude {
+		lon = maxLongitude
 	}
-	if lat < -85.05112878 {
-		lat = -85.05112878
-	} else if lat > 85.05112878 {
-		lat = 85.05112878
+	if lat < minLatitude {
+		lat = minLatitude
+	} else if lat > maxLatitude {
+		lat = maxLatitude
 	}
-	lonBits := encodeCoordBits(lon, -180.0, 180.0, geoStep)
-	latBits := encodeCoordBits(lat, -85.05112878, 85.05112878, geoStep)
-	var inter uint64 = 0
-	for i := 0; i < geoStep; i++ {
-		// MSB-first interleave: lon bit then lat bit
-		inter = (inter << 1) | ((lonBits >> (geoStep - 1 - i)) & 1)
-		inter = (inter << 1) | ((latBits >> (geoStep - 1 - i)) & 1)
-	}
-	return inter
+	
+	// Normalize to the range [0, 2^26)
+	normalizedLatitude := math.Pow(2, 26) * (lat - minLatitude) / latitudeRange
+	normalizedLongitude := math.Pow(2, 26) * (lon - minLongitude) / longitudeRange
+	
+	// Truncate to integers
+	latInt := uint32(normalizedLatitude)
+	lonInt := uint32(normalizedLongitude)
+	
+	return interleave(latInt, lonInt)
 }
 
 // compactInt64ToInt32 reverses the spreading used in interleave, keeping bits from even positions.
@@ -338,26 +350,26 @@ func compactInt64ToInt32(v uint64) uint32 {
 
 // geoDecodeScore decodes the 52-bit interleaved score into (lon, lat) approximations.
 func geoDecodeScore(score uint64) (float64, float64) {
-	// Separate out longitude and latitude interleaved bits
-	x := score      // even LSB positions (latitude)
-	y := score >> 1 // odd LSB positions (longitude)
-	latIdx := compactInt64ToInt32(x)
-	lonIdx := compactInt64ToInt32(y)
-	// Convert grid indices back to coordinate cell centers
-	latMin := -85.05112878
-	latMax := 85.05112878
-	lonMin := -180.0
-	lonMax := 180.0
-	latRange := latMax - latMin
-	lonRange := lonMax - lonMin
-	denom := float64(uint64(1) << geoStep)
-	gridLatMin := latMin + latRange*(float64(latIdx)/denom)
-	gridLatMax := latMin + latRange*(float64(latIdx+1)/denom)
-	gridLonMin := lonMin + lonRange*(float64(lonIdx)/denom)
-	gridLonMax := lonMin + lonRange*(float64(lonIdx+1)/denom)
-	lat := (gridLatMin + gridLatMax) / 2
-	lon := (gridLonMin + gridLonMax) / 2
-	return lon, lat
+	// Extract longitude bits (they were shifted left by 1 during encoding)
+	y := score >> 1
+	// Extract latitude bits (they were in the original positions)
+	x := score
+	
+	// Compact both latitude and longitude back to 32-bit integers
+	gridLatitudeNumber := compactInt64ToInt32(x)
+	gridLongitudeNumber := compactInt64ToInt32(y)
+	
+	// Calculate the grid boundaries
+	gridLatitudeMin := minLatitude + latitudeRange*(float64(gridLatitudeNumber)/math.Pow(2, 26))
+	gridLatitudeMax := minLatitude + latitudeRange*(float64(gridLatitudeNumber+1)/math.Pow(2, 26))
+	gridLongitudeMin := minLongitude + longitudeRange*(float64(gridLongitudeNumber)/math.Pow(2, 26))
+	gridLongitudeMax := minLongitude + longitudeRange*(float64(gridLongitudeNumber+1)/math.Pow(2, 26))
+	
+	// Calculate the center point of the grid cell
+	latitude := (gridLatitudeMin + gridLatitudeMax) / 2
+	longitude := (gridLongitudeMin + gridLongitudeMax) / 2
+	
+	return longitude, latitude
 }
 
 // Determine if a command should be propagated to replicas
