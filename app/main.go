@@ -282,6 +282,59 @@ func encodeRESPArray(args []string) []byte {
 	return []byte(b.String())
 }
 
+// --- Geospatial helpers (52-bit score: 26 bits lon, 26 bits lat interleaved) ---
+const geoStep = 26
+
+func clamp(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func encodeCoordBits(val, min, max float64, step int) uint64 {
+	var bits uint64 = 0
+	for i := 0; i < step; i++ {
+		mid := (min + max) / 2
+		bits <<= 1
+		if val >= mid {
+			bits |= 1
+			min = mid
+		} else {
+			max = mid
+		}
+	}
+	return bits
+}
+
+// geoHashScore returns the 52-bit interleaved geohash used by Redis GEO commands.
+// Longitude range: [-180, 180], Latitude range: [-85.05112878, 85.05112878].
+func geoHashScore(lon, lat float64) uint64 {
+	// Clamp to supported ranges
+	if lon < -180.0 {
+		lon = -180.0
+	} else if lon > 180.0 {
+		lon = 180.0
+	}
+	if lat < -85.05112878 {
+		lat = -85.05112878
+	} else if lat > 85.05112878 {
+		lat = 85.05112878
+	}
+	lonBits := encodeCoordBits(lon, -180.0, 180.0, geoStep)
+	latBits := encodeCoordBits(lat, -85.05112878, 85.05112878, geoStep)
+	var inter uint64 = 0
+	for i := 0; i < geoStep; i++ {
+		// MSB-first interleave: lon bit then lat bit
+		inter = (inter << 1) | ((lonBits >> (geoStep - 1 - i)) & 1)
+		inter = (inter << 1) | ((latBits >> (geoStep - 1 - i)) & 1)
+	}
+	return inter
+}
+
 // Determine if a command should be propagated to replicas
 func isWriteCommand(args []string) bool {
 	if len(args) == 0 {
@@ -1460,8 +1513,14 @@ func handleCommand(args []string) string {
 			zsetStorage[key] = zs
 		}
 		for j := i; j < len(args); j += 3 {
+			lonStr := args[j]
+			latStr := args[j+1]
 			member := args[j+2]
-			score := 0.0
+			lon, _ := strconv.ParseFloat(lonStr, 64)
+			lat, _ := strconv.ParseFloat(latStr, 64)
+			// Compute geohash-based score using 52-bit interleaving; store as float64
+			gh := geoHashScore(lon, lat)
+			score := float64(gh)
 			if old, exists := zs.dict[member]; exists {
 				if old != score {
 					zs.dict[member] = score
