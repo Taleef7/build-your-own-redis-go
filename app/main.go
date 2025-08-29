@@ -1232,6 +1232,19 @@ func handleClient(conn net.Conn) {
 				conn.Write([]byte(fmt.Sprintf("-ERR Can't execute '%s': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context\r\n", cmd)))
 				continue
 			}
+			// In subscribed mode, PING returns an array ["pong", "<message or empty>"]
+			if cmd == "ping" {
+				msg := ""
+				if len(args) >= 2 {
+					msg = args[1]
+				}
+				var b strings.Builder
+				b.WriteString("*2\r\n")
+				b.WriteString("$4\r\npong\r\n")
+				b.WriteString(fmt.Sprintf("$%d\r\n%s\r\n", len(msg), msg))
+				conn.Write([]byte(b.String()))
+				continue
+			}
 		}
 
 		// Handle SUBSCRIBE here to keep per-connection state
