@@ -284,12 +284,12 @@ func encodeRESPArray(args []string) []byte {
 
 // --- Geospatial helpers (52-bit score: 26 bits lon, 26 bits lat interleaved) ---
 const (
-	geoStep       = 26
-	minLatitude   = -85.05112878
-	maxLatitude   = 85.05112878
-	minLongitude  = -180.0
-	maxLongitude  = 180.0
-	latitudeRange = maxLatitude - minLatitude
+	geoStep        = 26
+	minLatitude    = -85.05112878
+	maxLatitude    = 85.05112878
+	minLongitude   = -180.0
+	maxLongitude   = 180.0
+	latitudeRange  = maxLatitude - minLatitude
 	longitudeRange = maxLongitude - minLongitude
 )
 
@@ -324,16 +324,16 @@ func geoHashScore(lon, lat float64) uint64 {
 	} else if lat > maxLatitude {
 		lat = maxLatitude
 	}
-	
+
 	// Normalize to the range [0, 2^26)
 	scale := float64(uint64(1) << 26) // 2^26 as exact integer
 	normalizedLatitude := scale * (lat - minLatitude) / latitudeRange
 	normalizedLongitude := scale * (lon - minLongitude) / longitudeRange
-	
+
 	// Truncate to integers
 	latInt := uint32(normalizedLatitude)
 	lonInt := uint32(normalizedLongitude)
-	
+
 	return interleave(latInt, lonInt)
 }
 
@@ -359,21 +359,13 @@ func geoDecodeScore(score uint64) (float64, float64) {
 	gridLatitudeNumber := compactInt64ToInt32(x)
 	gridLongitudeNumber := compactInt64ToInt32(y)
 	
-	// Calculate the grid boundaries
+	// Calculate the center point of the grid cell directly
 	scale := float64(uint64(1) << 26) // 2^26 as exact integer
-	gridLatitudeMin := minLatitude + latitudeRange*(float64(gridLatitudeNumber)/scale)
-	gridLatitudeMax := minLatitude + latitudeRange*(float64(gridLatitudeNumber+1)/scale)
-	gridLongitudeMin := minLongitude + longitudeRange*(float64(gridLongitudeNumber)/scale)
-	gridLongitudeMax := minLongitude + longitudeRange*(float64(gridLongitudeNumber+1)/scale)
-	
-	// Calculate the center point of the grid cell
-	latitude := (gridLatitudeMin + gridLatitudeMax) / 2
-	longitude := (gridLongitudeMin + gridLongitudeMax) / 2
+	latitude := minLatitude + latitudeRange*(float64(gridLatitudeNumber)+0.5)/scale
+	longitude := minLongitude + longitudeRange*(float64(gridLongitudeNumber)+0.5)/scale
 	
 	return longitude, latitude
-}
-
-// Determine if a command should be propagated to replicas
+}// Determine if a command should be propagated to replicas
 func isWriteCommand(args []string) bool {
 	if len(args) == 0 {
 		return false
