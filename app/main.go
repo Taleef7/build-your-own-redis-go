@@ -47,6 +47,10 @@ var streamStorage = make(map[string][]StreamEntry)
 var blpopWaiters = make(map[string][]chan [2]string)
 var blpopMutex sync.Mutex
 
+// Pub/Sub: global subscribers registry (channel -> set of connections)
+var pubsubSubscribers = make(map[string]map[net.Conn]bool)
+var pubsubMutex sync.Mutex
+
 // Replication metadata (initialized at startup)
 var masterReplID = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb"
 var masterReplOffset int64 = 0
@@ -1163,7 +1167,20 @@ func handleCommand(args []string) string {
 }
 
 func handleClient(conn net.Conn) {
-	defer conn.Close()
+	defer func() {
+		// Cleanup this connection from global pubsub registry on close
+		pubsubMutex.Lock()
+		for ch, set := range pubsubSubscribers {
+			if set[conn] {
+				delete(set, conn)
+				if len(set) == 0 {
+					delete(pubsubSubscribers, ch)
+				}
+			}
+		}
+		pubsubMutex.Unlock()
+		conn.Close()
+	}()
 
 	// Handle multiple commands from the same connection
 	reader := bufio.NewReader(conn)
@@ -1258,6 +1275,15 @@ func handleClient(conn net.Conn) {
 				ch := args[i]
 				if !subscribed[ch] {
 					subscribed[ch] = true
+					// Register globally
+					pubsubMutex.Lock()
+					set := pubsubSubscribers[ch]
+					if set == nil {
+						set = make(map[net.Conn]bool)
+						pubsubSubscribers[ch] = set
+					}
+					set[conn] = true
+					pubsubMutex.Unlock()
 				}
 				count := len(subscribed)
 				// Send one confirmation per channel
@@ -1268,6 +1294,24 @@ func handleClient(conn net.Conn) {
 				b.WriteString(fmt.Sprintf(":%d\r\n", count))
 				conn.Write([]byte(b.String()))
 			}
+			continue
+		}
+
+		// PUBLISH command: respond with number of subscribers for the channel
+		if cmd == "publish" {
+			if len(args) < 3 {
+				conn.Write([]byte("-ERR wrong number of arguments for PUBLISH command\r\n"))
+				continue
+			}
+			channel := args[1]
+			// message := args[2]  // not used in this stage
+			pubsubMutex.Lock()
+			count := 0
+			if set, ok := pubsubSubscribers[channel]; ok {
+				count = len(set)
+			}
+			pubsubMutex.Unlock()
+			conn.Write([]byte(fmt.Sprintf(":%d\r\n", count)))
 			continue
 		}
 
