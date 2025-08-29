@@ -285,16 +285,6 @@ func encodeRESPArray(args []string) []byte {
 // --- Geospatial helpers (52-bit score: 26 bits lon, 26 bits lat interleaved) ---
 const geoStep = 26
 
-func clamp(v, lo, hi float64) float64 {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}
-
 func encodeCoordBits(val, min, max float64, step int) uint64 {
 	var bits uint64 = 0
 	for i := 0; i < step; i++ {
@@ -361,12 +351,8 @@ func geoDecodeScore(score uint64) (float64, float64) {
 	latRange := latMax - latMin
 	lonRange := lonMax - lonMin
 	denom := float64(uint64(1) << geoStep)
-	gridLatMin := latMin + latRange*(float64(latIdx)/denom)
-	gridLatMax := latMin + latRange*(float64(latIdx+1)/denom)
-	gridLonMin := lonMin + lonRange*(float64(lonIdx)/denom)
-	gridLonMax := lonMin + lonRange*(float64(lonIdx+1)/denom)
-	lat := (gridLatMin + gridLatMax) / 2
-	lon := (gridLonMin + gridLonMax) / 2
+	lat := latMin + latRange*((float64(latIdx)+0.5)/denom)
+	lon := lonMin + lonRange*((float64(lonIdx)+0.5)/denom)
 	return lon, lat
 }
 
