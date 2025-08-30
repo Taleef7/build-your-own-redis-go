@@ -381,14 +381,14 @@ func geoDecodeScore(score uint64) (float64, float64) {
 	ilato := uint32(hash_sep)        // latitude from lower 32 bits
 	ilono := uint32(hash_sep >> 32)  // longitude from upper 32 bits
 	
-	// Use exact Redis C coordinate calculation
+	// Use exact Redis C coordinate calculation with +0.5 for center
 	step := math.Pow(2, float64(geoStep))
 	lat_scale := latitudeRange
 	long_scale := longitudeRange
 	
-	// Exact Redis C calculation (no +0.5 center offset in the formula)
-	latitude := minLatitude + (float64(ilato) * 1.0 / step) * lat_scale
-	longitude := minLongitude + (float64(ilono) * 1.0 / step) * long_scale
+	// Calculate center of the geohash cell
+	latitude := minLatitude + (float64(ilato) + 0.5) / step * lat_scale
+	longitude := minLongitude + (float64(ilono) + 0.5) / step * long_scale
 	
 	return longitude, latitude
 }// Determine if a command should be propagated to replicas
