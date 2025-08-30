@@ -349,49 +349,21 @@ func compactInt64ToInt32(v uint64) uint32 {
 	return uint32(v)
 }
 
-// geoDecodeScore decodes the 52-bit interleaved score into (lon, lat) approximations.
+// geoDecodeScore decodes the 52-bit interleaved score into (lon, lat) using
+// compact deinterleaving and returns the center of the cell ("+0.5" rule).
 func geoDecodeScore(score uint64) (float64, float64) {
-	// Use the exact Redis C deinterleaving algorithm
-	x := score
-	y := score >> 1
-	
-	// Apply the exact same compacting operations as Redis C
-	x = (x | (x >> 0)) & 0x5555555555555555
-	y = (y | (y >> 0)) & 0x5555555555555555
-	
-	x = (x | (x >> 1)) & 0x3333333333333333
-	y = (y | (y >> 1)) & 0x3333333333333333
-	
-	x = (x | (x >> 2)) & 0x0F0F0F0F0F0F0F0F
-	y = (y | (y >> 2)) & 0x0F0F0F0F0F0F0F0F
-	
-	x = (x | (x >> 4)) & 0x00FF00FF00FF00FF
-	y = (y | (y >> 4)) & 0x00FF00FF00FF00FF
-	
-	x = (x | (x >> 8)) & 0x0000FFFF0000FFFF
-	y = (y | (y >> 8)) & 0x0000FFFF0000FFFF
-	
-	x = (x | (x >> 16)) & 0x00000000FFFFFFFF
-	y = (y | (y >> 16)) & 0x00000000FFFFFFFF
-	
-	// This matches Redis C: hash_sep = x | (y << 32)
-	hash_sep := x | (y << 32)
-	
-	// Extract latitude and longitude exactly as Redis C does
-	ilato := uint32(hash_sep)        // latitude from lower 32 bits
-	ilono := uint32(hash_sep >> 32)  // longitude from upper 32 bits
-	
-	// Use exact Redis C coordinate calculation with +0.5 for center
-	step := math.Pow(2, float64(geoStep))
-	lat_scale := latitudeRange
-	long_scale := longitudeRange
-	
-	// Calculate center of the geohash cell
-	latitude := minLatitude + (float64(ilato) + 0.5) / step * lat_scale
-	longitude := minLongitude + (float64(ilono) + 0.5) / step * long_scale
-	
-	return longitude, latitude
-}// Determine if a command should be propagated to replicas
+	// Deinterleave: even bits = latitude, odd bits = longitude (matches interleave())
+	latIdx := compactInt64ToInt32(score)
+	lonIdx := compactInt64ToInt32(score >> 1)
+
+	// Use exact step as float to avoid rounding surprises
+	step := float64(uint64(1) << geoStep)
+
+	// Center of the cell for both dimensions
+	lat := minLatitude + (float64(latIdx)+0.5)/step*latitudeRange
+	lon := minLongitude + (float64(lonIdx)+0.5)/step*longitudeRange
+	return lon, lat
+}
 func isWriteCommand(args []string) bool {
 	if len(args) == 0 {
 		return false
