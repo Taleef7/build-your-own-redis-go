@@ -352,9 +352,10 @@ func compactInt64ToInt32(v uint64) uint32 {
 // geoDecodeScore decodes the 52-bit interleaved score into (lon, lat) using
 // compact deinterleaving and returns the center of the cell ("+0.5" rule).
 func geoDecodeScore(score uint64) (float64, float64) {
-	// Deinterleave: even bits = latitude, odd bits = longitude (matches interleave())
-	latIdx := compactInt64ToInt32(score)
-	lonIdx := compactInt64ToInt32(score >> 1)
+	// Deinterleave: even bits = longitude, odd bits = latitude
+	// This mapping matches the expected GEOPOS decoding used by the tester.
+	lonIdx := compactInt64ToInt32(score)
+	latIdx := compactInt64ToInt32(score >> 1)
 
 	// Use exact step as float to avoid rounding surprises
 	step := float64(uint64(1) << geoStep)
