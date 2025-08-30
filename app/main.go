@@ -331,9 +331,9 @@ func geoHashScore(lon, lat float64) uint64 {
 	normalizedLatitude := scale * (lat - minLatitude) / latitudeRange
 	normalizedLongitude := scale * (lon - minLongitude) / longitudeRange
 
-	// Truncate to integers
-	latInt := uint32(normalizedLatitude)
-	lonInt := uint32(normalizedLongitude)
+	// Round to nearest integers for better precision
+	latInt := uint32(math.Round(normalizedLatitude))
+	lonInt := uint32(math.Round(normalizedLongitude))
 
 	return interleave(latInt, lonInt)
 }
