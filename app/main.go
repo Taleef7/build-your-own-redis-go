@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -331,11 +330,12 @@ func geoHashScore(lon, lat float64) uint64 {
 	normalizedLatitude := scale * (lat - minLatitude) / latitudeRange
 	normalizedLongitude := scale * (lon - minLongitude) / longitudeRange
 
-	// Round to nearest integers for better precision
-	latInt := uint32(math.Round(normalizedLatitude))
-	lonInt := uint32(math.Round(normalizedLongitude))
+	// Truncate to integers matching reference implementation behavior
+	latInt := uint32(normalizedLatitude)
+	lonInt := uint32(normalizedLongitude)
 
-	return interleave(latInt, lonInt)
+	// Interleave with x=longitude (even bits) and y=latitude (odd bits)
+	return interleave(lonInt, latInt)
 }
 
 // compactInt64ToInt32 reverses the spreading used in interleave, keeping bits from even positions.
@@ -349,22 +349,19 @@ func compactInt64ToInt32(v uint64) uint32 {
 	return uint32(v)
 }
 
-// geoDecodeScore decodes the 52-bit interleaved score into (lon, lat) using
-// compact deinterleaving and returns the center of the cell ("+0.5" rule).
+// geoDecodeScore decodes the 52-bit interleaved score into (lon, lat) approximations.
 func geoDecodeScore(score uint64) (float64, float64) {
-	// Deinterleave: even bits = longitude, odd bits = latitude
-	// This mapping matches the expected GEOPOS decoding used by the tester.
-	lonIdx := compactInt64ToInt32(score)
-	latIdx := compactInt64ToInt32(score >> 1)
+	// Deinterleave directly: even bits are longitude, odd bits are latitude
+	lonBits := compactInt64ToInt32(score)
+	latBits := compactInt64ToInt32(score >> 1)
 
-	// Use exact step as float to avoid rounding surprises
 	step := float64(uint64(1) << geoStep)
+	latitude := minLatitude + (float64(latBits)+0.5)/step*latitudeRange
+	longitude := minLongitude + (float64(lonBits)+0.5)/step*longitudeRange
 
-	// Center of the cell for both dimensions
-	lat := minLatitude + (float64(latIdx)+0.5)/step*latitudeRange
-	lon := minLongitude + (float64(lonIdx)+0.5)/step*longitudeRange
-	return lon, lat
+	return longitude, latitude
 }
+// Determine if a command should be propagated to replicas
 func isWriteCommand(args []string) bool {
 	if len(args) == 0 {
 		return false

@@ -1,33 +1,79 @@
 [![progress-banner](https://backend.codecrafters.io/progress/redis/bd41f805-6048-40ae-b95d-0efead917cb8)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
+## Build Your Own Redis (Go)
 
-This is a starting point for Go solutions to the
-["Build Your Own Redis" Challenge](https://codecrafters.io/challenges/redis).
+A compact, single-binary Redis-like server implemented in Go. It speaks the Redis RESP protocol and supports many core commands, including strings, lists, sorted sets, streams, pub/sub, simple replication, and geospatial decode (GEOPOS).
 
-In this challenge, you'll build a toy Redis clone that's capable of handling
-basic commands like `PING`, `SET` and `GET`. Along the way we'll learn about
-event loops, the Redis protocol and more.
+This repo started as part of the CodeCrafters “Build Your Own Redis” challenge and has been extended and polished to showcase the implementation as a standalone project.
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+## Features
 
-# Passing the first stage
+- RESP protocol server (single TCP binary)
+- Strings: PING, ECHO, SET (with PX), GET, INCR
+- Lists: LPUSH, RPUSH, LPOP (count), LLEN, LRANGE, BLPOP
+- Sorted sets: ZADD, ZREM, ZSCORE, ZRANGE, ZRANK, ZCARD
+- Streams: XADD, XRANGE, XREAD (BLOCK)
+- Pub/Sub: SUBSCRIBE, UNSUBSCRIBE, PUBLISH
+- Replication (minimal): PSYNC, REPLCONF, INFO replication, WAIT
+- Geospatial: GEOADD (validations), GEOPOS (score decoding)
+- In-memory storage with expirations
 
-The entry point for your Redis implementation is in `app/main.go`. Study and
-uncomment the relevant code, and push your changes to pass the first stage:
+## Project layout
 
-```sh
-git commit -am "pass 1st stage" # any msg
-git push origin master
+- `app/main.go` – the entire server implementation
+- `your_program.sh` – build-and-run helper (mirrors challenge runner)
+- `go.mod` – module declaration (Go 1.24)
+
+## Run locally
+
+Requirements: Go 1.24+
+
+Quick run (recommended, matches the challenge runner):
+
+```bash
+./your_program.sh
 ```
 
-That's all!
+Connect with redis-cli:
 
-# Stage 2 & beyond
+```bash
+redis-cli -p 6379
+> PING
+PONG
+> SET key value PX 5000
+OK
+> GET key
+"value"
+> ZADD places 3663832752681684 Paris
+1
+> GEOPOS places Paris
+[["2.294471561908722","48.85846255040141"]]
+```
 
-Note: This section is for stages 2 and beyond.
+## Notable implementation details
 
-1. Ensure you have `go (1.24)` installed locally
-1. Run `./your_program.sh` to run your Redis server, which is implemented in
-   `app/main.go`.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
+- Single process, concurrent clients via goroutines
+- Minimal RDB loader for FULLRESYNC bootstrapping
+- Interleaved 52‑bit geohash scores for GEO commands (decode for GEOPOS)
+- Simple replication stream with GETACK/WAIThandling
+
+## Publishing your own module (optional)
+
+If you plan to import this as a Go module from GitHub, update `go.mod`:
+
+1) Replace the module path with your GitHub repo path, e.g.:
+
+```
+module github.com/<your-username>/<your-repo>
+```
+
+2) Run `go mod tidy` after pushing the repo.
+
+This change isn’t required to run the server locally.
+
+## Attribution
+
+Inspired by the CodeCrafters “Build Your Own Redis” challenge. See https://codecrafters.io for the original course and materials.
+
+## License
+
+MIT

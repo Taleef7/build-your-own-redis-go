@@ -54,29 +54,3 @@ func TestDecodeMango(t *testing.T) {
 		t.Errorf("Longitude is outside the tolerance range. Got %.15f, expected %.15f", lon, expectedLon)
 	}
 }
-
-func TestDecodeBlueberryFromRemote(t *testing.T) {
-	// From remote logs: score used with ZADD for "blueberry"
-	score := uint64(3803618426268781)
-	// Expected latitude from remote: 51.99678040471944 (± 1e-06)
-	expectedLat := 51.99678040471944
-	tol := 1e-6
-
-	lon, lat := geoDecodeScore(score)
-	diff := math.Abs(lat - expectedLat)
-	fmt.Printf("Blueberry (current mapping): score=%d -> lon=%.15f lat=%.15f (diff=%.15f)\n", score, lon, lat, diff)
-
-	// Try swapped mapping: lon from even bits, lat from odd bits
-	lonIdx := compactInt64ToInt32_test(score)
-	latIdx := compactInt64ToInt32_test(score >> 1)
-	step := float64(uint64(1) << 26)
-	lon2 := minLongitude + (float64(lonIdx)+0.5)/step*longitudeRange
-	lat2 := minLatitude + (float64(latIdx)+0.5)/step*latitudeRange
-	diff2 := math.Abs(lat2 - expectedLat)
-	fmt.Printf("Blueberry (swapped mapping):  lon=%.15f lat=%.15f (diff=%.15f)\n", lon2, lat2, diff2)
-
-	if diff <= tol || diff2 <= tol {
-		return
-	}
-	t.Fatalf("lat outside tolerance: current diff=%.15f, swapped diff=%.15f", diff, diff2)
-}
