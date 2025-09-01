@@ -1,4 +1,7 @@
 [![progress-banner](https://backend.codecrafters.io/progress/redis/bd41f805-6048-40ae-b95d-0efead917cb8)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
+![Go Version](https://img.shields.io/badge/Go-1.24-blue)
+[![License](https://img.shields.io/github/license/Taleef7/build-your-own-redis-go)](LICENSE)
+
 ## Build Your Own Redis (Go)
 
 A compact, single-binary Redis-like server implemented in Go. It speaks the Redis RESP protocol and supports many core commands, including strings, lists, sorted sets, streams, pub/sub, simple replication, and geospatial decode (GEOPOS).
@@ -56,23 +59,38 @@ OK
 - Interleaved 52‑bit geohash scores for GEO commands (decode for GEOPOS)
 - Simple replication stream with GETACK/WAIThandling
 
+## Implemented stages (highlights)
+
+- Networking & RESP protocol: request parsing, multi-command handling, proper RESP replies
+- Strings: PING, ECHO, SET (PX), GET, INCR
+- Lists: LPUSH, RPUSH, LPOP (count), LLEN, LRANGE, BLPOP (timeout)
+- Transactions: MULTI, queued commands, EXEC, DISCARD, error handling
+- Pub/Sub: SUBSCRIBE, UNSUBSCRIBE, PUBLISH, subscribed-mode PING
+- Streams: XADD (explicit/auto IDs), XRANGE, XREAD (BLOCK and $)
+- Replication: REPLCONF, PSYNC FULLRESYNC, empty RDB transfer, command propagation, WAIT/ACKs
+- RDB persistence: minimal loader for REDIS0011 (string keys)
+- Sorted sets: ZADD, ZREM, ZSCORE, ZRANGE, ZRANK, ZCARD (score/member ordering)
+- Geospatial: GEOADD validation + score encoding, GEOPOS coordinate decoding
+- Config/Info: CONFIG GET dir/dbfilename, INFO replication
+- Keys: KEYS * (strings)
+
 ## Publishing your own module (optional)
 
 If you plan to import this as a Go module from GitHub, update `go.mod`:
 
 1) Replace the module path with your GitHub repo path, e.g.:
 
-```
+```text
 module github.com/<your-username>/<your-repo>
 ```
 
-2) Run `go mod tidy` after pushing the repo.
+1) Run `go mod tidy` after pushing the repo.
 
 This change isn’t required to run the server locally.
 
 ## Attribution
 
-Inspired by the CodeCrafters “Build Your Own Redis” challenge. See https://codecrafters.io for the original course and materials.
+Inspired by the CodeCrafters “Build Your Own Redis” challenge. See [codecrafters.io](https://codecrafters.io) for the original course and materials.
 
 ## License
 
